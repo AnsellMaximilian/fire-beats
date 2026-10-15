@@ -1,0 +1,19 @@
+{
+  "name": "firelab-webrtc-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Small HTTP/WebSocket signaling server for the FireLab WebRTC prototype",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.3"
+  }
+}

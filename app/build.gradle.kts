@@ -3,6 +3,9 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val fireLabServerUrl = providers.gradleProperty("FIRELAB_SERVER_URL")
+    .orElse("http://10.0.2.2:3000")
+
 android {
     namespace = "com.example.firelab"
     compileSdk {
@@ -17,6 +20,8 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+
+        buildConfigField("String", "SERVER_URL", "\"${fireLabServerUrl.get()}\"")
 
     }
 
@@ -35,6 +40,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

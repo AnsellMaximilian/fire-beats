@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Share camera to FireLab</title>
+    <link rel="stylesheet" href="/shared.css" />
+    <style>
+      body { padding: max(1.25rem, env(safe-area-inset-top)) 1.25rem max(1.25rem, env(safe-area-inset-bottom)); display: grid; place-items: center; }
+      main { width: min(100%, 520px); }
+      h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+      .preview { width: 100%; aspect-ratio: 3 / 4; border-radius: 24px; object-fit: cover; background: #111827; margin: 1.25rem 0; }
+      button { width: 100%; font-size: 1.05rem; }
+      .warning { padding: 1rem; border-radius: 14px; background: #7c2d12; color: #ffedd5; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="status" id="status">Connecting to TV…</p>
+      <h1>Share your camera</h1>
+      <p class="muted">Your video goes directly to the TV over WebRTC. This prototype does not record it.</p>
+      <p id="secureWarning" class="warning" hidden>Camera access needs HTTPS. Start the server with trusted TLS or set PUBLIC_URL to an HTTPS tunnel, then scan the new QR code.</p>
+      <video id="preview" class="preview" autoplay muted playsinline></video>
+      <button id="start" type="button">Start camera</button>
+    </main>
+    <script>
+      const room = new URLSearchParams(location.search).get("room");
+      const status = document.querySelector("#status");
+      const button = document.querySelector("#start");
+      const preview = document.querySelector("#preview");
+      const warning = document.querySelector("#secureWarning");
+      warning.hidden = window.isSecureContext;
+      button.disabled = !room;
+
+      let socket;
+      let peer;
+      let stream;
+      let socketReady;
+      let queuedCandidates = [];
+      const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+      function setStatus(text) { status.textContent = text; }
+      function connect() {
+        socketReady = new Promise((resolve, reject) => {
+          const protocol = location.protocol === "https:" ? "wss" : "ws";
+          socket = new WebSocket(`${protocol}://${location.host}/signal`);
+          socket.onopen = () => {
+            socket.send(JSON.stringify({ type: "join", room, role: "phone" }));
+            setStatus("Ready to start"); resolve();
+          };
+          socket.onerror = () => reject(new Error("Could not reach signaling server"));
+          socket.onclose = () => setStatus("Disconnected — reload this page to retry");
+          socket.onmessage = (event) => {
+            const message = JSON.parse(event.data);
+            if (message.type === "signal") handleSignal(message.data).catch((error) => setStatus(error.message));
+          };
+        });
+      }
+      function signal(data) { socket.send(JSON.stringify({ type: "signal", data })); }
+      function createPeer() {
+        peer?.close();
+        queuedCandidates = [];
+        peer = new RTCPeerConnection(rtcConfig);
+        for (const track of stream.getTracks()) peer.addTrack(track, stream);
+        peer.onicecandidate = ({ candidate }) => candidate && signal({ candidate });
+        peer.onconnectionstatechange = () => {
+          if (peer.connectionState === "connected") setStatus("Live on TV");
+          if (peer.connectionState === "failed") setStatus("Connection failed. Try reloading both screens.");
+        };
+        return peer;
+      }
+      async function handleSignal(data) {
+        if (data.description?.type === "answer") {
+          await peer.setRemoteDescription(data.description);
+          for (const candidate of queuedCandidates.splice(0)) await peer.addIceCandidate(candidate);
+        } else if (data.candidate) {
+          if (peer?.remoteDescription) await peer.addIceCandidate(data.candidate);
+          else queuedCandidates.push(data.candidate);
+        }
+      }
+      async function startCamera() {
+        button.disabled = true;
+        setStatus("Requesting camera…");
+        try {
+          await socketReady;
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: false,
+          });
+          preview.srcObject = stream;
+          const connection = createPeer();
+          await connection.setLocalDescription(await connection.createOffer());
+          signal({ description: connection.localDescription });
+          setStatus("Connecting video to TV…");
+          button.textContent = "Camera started";
+        } catch (error) {
+          setStatus(error.message || "Could not start camera");
+          button.disabled = false;
+        }
+      }
+      button.addEventListener("click", startCamera);
+      connect();
+    </script>
+  </body>
+</html>

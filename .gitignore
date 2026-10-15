@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+server/node_modules/
+server/.env
+server/*.pem

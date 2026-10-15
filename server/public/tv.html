@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FireLab receiver</title>
+    <link rel="stylesheet" href="/shared.css" />
+    <style>
+      body { overflow: hidden; }
+      #remoteVideo { width: 100vw; height: 100vh; object-fit: contain; background: #000; }
+      .pairing {
+        position: fixed; inset: 0; display: grid; place-items: center; padding: 5vh 5vw;
+        background: radial-gradient(circle at top, #172033, #080b12 65%);
+      }
+      .pairing[hidden] { display: none; }
+      .card { display: grid; grid-template-columns: minmax(260px, 34vh) minmax(360px, 1fr); gap: 5vw; align-items: center; max-width: 1100px; }
+      .qr { background: white; padding: 18px; border-radius: 24px; box-shadow: 0 25px 80px #0008; }
+      .qr svg { display: block; width: 100%; height: auto; }
+      h1 { margin: 0 0 1rem; font-size: clamp(2.2rem, 5vw, 4.6rem); line-height: 1; }
+      p { font-size: clamp(1.1rem, 2vw, 1.6rem); line-height: 1.45; }
+      code { color: #fdba74; }
+      @media (max-width: 720px) { .card { grid-template-columns: 1fr; text-align: center; } }
+    </style>
+  </head>
+  <body>
+    <video id="remoteVideo" autoplay playsinline></video>
+    <main id="pairing" class="pairing">
+      <div class="card">
+        <div class="qr">__QR_SVG__</div>
+        <div>
+          <p class="status" id="status">Waiting for your phone</p>
+          <h1>Scan to share your camera</h1>
+          <p>Open the QR code with your phone, then tap <strong>Start camera</strong>.</p>
+          <p class="muted">Room <code id="room"></code></p>
+        </div>
+      </div>
+    </main>
+    <script>
+      const room = __ROOM_JSON__;
+      const phoneUrl = __PHONE_URL_JSON__;
+      const video = document.querySelector("#remoteVideo");
+      const pairing = document.querySelector("#pairing");
+      const status = document.querySelector("#status");
+      document.querySelector("#room").textContent = room;
+
+      let socket;
+      let peer;
+      let queuedCandidates = [];
+      const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+      function setStatus(text) { status.textContent = text; }
+      function signal(data) {
+        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "signal", data }));
+      }
+      function createPeer() {
+        peer?.close();
+        queuedCandidates = [];
+        peer = new RTCPeerConnection(rtcConfig);
+        peer.onicecandidate = ({ candidate }) => candidate && signal({ candidate });
+        peer.ontrack = ({ streams }) => {
+          video.srcObject = streams[0];
+          video.play().catch(() => {});
+          pairing.hidden = true;
+        };
+        peer.onconnectionstatechange = () => {
+          if (peer.connectionState === "connected") setStatus("Camera connected");
+          if (["failed", "closed", "disconnected"].includes(peer.connectionState)) pairing.hidden = false;
+        };
+        return peer;
+      }
+      async function handleSignal(data) {
+        if (data.description?.type === "offer") {
+          const connection = createPeer();
+          await connection.setRemoteDescription(data.description);
+          for (const candidate of queuedCandidates.splice(0)) await connection.addIceCandidate(candidate);
+          await connection.setLocalDescription(await connection.createAnswer());
+          signal({ description: connection.localDescription });
+        } else if (data.candidate) {
+          if (peer?.remoteDescription) await peer.addIceCandidate(data.candidate);
+          else queuedCandidates.push(data.candidate);
+        }
+      }
+      function connect() {
+        const protocol = location.protocol === "https:" ? "wss" : "ws";
+        socket = new WebSocket(`${protocol}://${location.host}/signal`);
+        socket.onopen = () => socket.send(JSON.stringify({ type: "join", room, role: "tv" }));
+        socket.onmessage = (event) => {
+          const message = JSON.parse(event.data);
+          if (message.type === "peer-joined" && message.role === "phone") setStatus("Phone connected — waiting for camera");
+          if (message.type === "signal") handleSignal(message.data).catch((error) => setStatus(error.message));
+          if (message.type === "peer-left" && message.role === "phone") {
+            peer?.close(); peer = undefined; video.srcObject = null; pairing.hidden = false; setStatus("Waiting for your phone");
+          }
+        };
+        socket.onclose = () => { setStatus("Signaling disconnected — retrying…"); setTimeout(connect, 1500); };
+      }
+      connect();
+    </script>
+  </body>
+</html>
