@@ -3,103 +3,495 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Share camera to FireLab</title>
+    <title>Track pose for FireLab</title>
     <link rel="stylesheet" href="/shared.css" />
     <style>
       body { padding: max(1.25rem, env(safe-area-inset-top)) 1.25rem max(1.25rem, env(safe-area-inset-bottom)); display: grid; place-items: center; }
-      main { width: min(100%, 520px); }
+      main { width: min(100%, 640px); }
       h1 { font-size: 2rem; margin-bottom: 0.5rem; }
-      .preview { width: 100%; aspect-ratio: 3 / 4; border-radius: 24px; object-fit: cover; background: #111827; margin: 1.25rem 0; }
+      .preview { display: block; width: 100%; aspect-ratio: 3 / 4; border-radius: 24px; object-fit: cover; background: #111827; margin: 1.25rem 0; transform: scaleX(-1); }
+      .model-status { min-height: 1.5rem; margin-bottom: 0; }
       button { width: 100%; font-size: 1.05rem; }
       .warning { padding: 1rem; border-radius: 14px; background: #7c2d12; color: #ffedd5; }
+      .music-panel { margin: 1.25rem 0; padding: 1rem; border: 1px solid #334155; border-radius: 18px; background: #111827; }
+      .music-panel h2 { margin: 0 0 0.75rem; }
+      .music-panel label { display: block; margin: 0.8rem 0 0.35rem; color: #cbd5e1; }
+      .music-panel input, .music-panel select { width: 100%; font: inherit; color: #f8fafc; background: #0f172a; border: 1px solid #475569; border-radius: 12px; padding: 0.75rem; }
+      .music-panel button { margin-top: 0.75rem; }
+      .music-panel progress { width: 100%; height: 0.75rem; margin-top: 0.75rem; accent-color: #38bdf8; }
+      .compact-status { min-height: 1.4rem; margin: 0.45rem 0 0; font-size: 0.9rem; }
     </style>
   </head>
   <body>
     <main>
       <p class="status" id="status">Connecting to TV…</p>
-      <h1>Share your camera</h1>
-      <p class="muted">Your video goes directly to the TV over WebRTC. This prototype does not record it.</p>
+      <h1>Send your pose</h1>
+      <p class="muted">Keep your head, shoulders, elbows, and hands visible. Only body landmarks are sent to the TV; camera video stays on this phone.</p>
       <p id="secureWarning" class="warning" hidden>Camera access needs HTTPS. Start the server with trusted TLS or set PUBLIC_URL to an HTTPS tunnel, then scan the new QR code.</p>
+      <section class="music-panel">
+        <h2>Beat track</h2>
+        <label for="trackFile">Upload an MP3</label>
+        <input id="trackFile" type="file" />
+        <button id="uploadTrack" type="button">Upload and analyze</button>
+        <progress id="trackProgress" max="100" value="0"></progress>
+        <p id="trackStatus" class="muted compact-status">Choose an MP3, or select one already uploaded.</p>
+        <label for="trackSelect">Available tracks</label>
+        <select id="trackSelect" disabled>
+          <option>Loading tracks…</option>
+        </select>
+        <button id="chooseTrack" type="button" disabled>Use selected track</button>
+      </section>
+      <p id="modelStatus" class="muted model-status">The lightweight pose model loads after the camera starts.</p>
       <video id="preview" class="preview" autoplay muted playsinline></video>
-      <button id="start" type="button">Start camera</button>
+      <button id="start" type="button">Start pose tracking</button>
     </main>
-    <script>
+    <script type="module">
       const room = new URLSearchParams(location.search).get("room");
       const status = document.querySelector("#status");
+      const modelStatus = document.querySelector("#modelStatus");
       const button = document.querySelector("#start");
       const preview = document.querySelector("#preview");
       const warning = document.querySelector("#secureWarning");
+      const trackFile = document.querySelector("#trackFile");
+      const uploadTrack = document.querySelector("#uploadTrack");
+      const trackProgress = document.querySelector("#trackProgress");
+      const trackStatus = document.querySelector("#trackStatus");
+      const trackSelect = document.querySelector("#trackSelect");
+      const chooseTrack = document.querySelector("#chooseTrack");
       warning.hidden = window.isSecureContext;
       button.disabled = !room;
 
       let socket;
       let peer;
-      let stream;
+      let poseChannel;
+      let cameraStream;
       let socketReady;
+      let poseLandmarker;
+      let poseDelegate = "CPU";
+      let poseLoopStarted = false;
+      let lastPoseAt = 0;
+      let lastVideoTime = -1;
       let queuedCandidates = [];
+      let socketConnected = false;
+      let availableTracks = [];
+      let socketReconnectTimer;
+      let socketReconnectAttempt = 0;
+      let negotiationInProgress = false;
+      let poseReconnectTimer;
+
+      const poseIntervalMs = 50;
+      const maxUploadBytes = 50 * 1024 * 1024;
       const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+      const visionModuleUrl = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs";
+      const visionWasmUrl = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
+      const poseModelUrl = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
 
       function setStatus(text) { status.textContent = text; }
+
+      function renderTracks(preferredId) {
+        const previousId = preferredId || trackSelect.value;
+        trackSelect.replaceChildren();
+        if (!availableTracks.length) {
+          trackSelect.add(new Option("No uploaded tracks yet", ""));
+        } else {
+          for (const track of availableTracks) {
+            const details = track.status === "ready"
+              ? `${track.bpm} BPM · ${track.beatCount} beats`
+              : `${track.status} ${track.progress}%`;
+            const option = new Option(`${track.name} — ${details}`, track.id);
+            option.disabled = track.status !== "ready";
+            trackSelect.add(option);
+          }
+        }
+        const preferredOption = [...trackSelect.options].find(
+          (option) => option.value === previousId && !option.disabled,
+        );
+        const firstReadyOption = [...trackSelect.options].find((option) => !option.disabled && option.value);
+        trackSelect.value = preferredOption?.value || firstReadyOption?.value || "";
+        trackSelect.disabled = !firstReadyOption;
+        chooseTrack.disabled = !socketConnected || !trackSelect.value;
+      }
+
+      async function loadTracks(preferredId) {
+        try {
+          const response = await fetch("/api/tracks", { cache: "no-store" });
+          if (!response.ok) throw new Error(`Track list failed (${response.status})`);
+          availableTracks = await response.json();
+          renderTracks(preferredId);
+        } catch (error) {
+          trackStatus.textContent = error.message;
+        }
+      }
+
+      function updateTrack(track) {
+        const existingIndex = availableTracks.findIndex((item) => item.id === track.id);
+        if (existingIndex >= 0) availableTracks[existingIndex] = track;
+        else availableTracks.unshift(track);
+        renderTracks(track.status === "ready" ? track.id : undefined);
+      }
+
+      async function uploadSelectedTrack() {
+        const file = trackFile.files?.[0];
+        if (!file) {
+          trackStatus.textContent = "Choose an MP3 file first.";
+          return;
+        }
+        if (!file.name.toLowerCase().endsWith(".mp3")) {
+          trackStatus.textContent = "That does not look like an MP3 file.";
+          return;
+        }
+        if (file.size > maxUploadBytes) {
+          trackStatus.textContent = `That file is ${(file.size / 1024 / 1024).toFixed(1)} MB; the current limit is 50 MB.`;
+          return;
+        }
+
+        uploadTrack.disabled = true;
+        trackProgress.value = 0;
+        trackStatus.textContent = `Reading ${file.name} from Android…`;
+
+        let fileBytes;
+        try {
+          // Some Android document providers revoke their content URI as soon as the
+          // picker closes. Materializing it first gives XHR a stable upload body and
+          // lets us report file-access failures separately from network failures.
+          fileBytes = await file.arrayBuffer();
+        } catch (error) {
+          uploadTrack.disabled = false;
+          trackStatus.textContent = `Could not read that file (${error.name || "file error"}). Try choosing it from the Files app.`;
+          return;
+        }
+
+        trackStatus.textContent = `Uploading ${file.name}…`;
+
+        const xhr = new XMLHttpRequest();
+        const query = new URLSearchParams({ room, name: file.name });
+        xhr.open("POST", `/api/tracks?${query}`);
+        xhr.setRequestHeader("content-type", file.type || "audio/mpeg");
+        // Harmless to the local server and prevents ngrok's free-tier interstitial
+        // from replacing an API response with HTML.
+        xhr.setRequestHeader("ngrok-skip-browser-warning", "true");
+        xhr.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return;
+          const percent = Math.round((event.loaded / event.total) * 55);
+          trackProgress.value = percent;
+          trackStatus.textContent = `Uploading ${file.name} — ${Math.round((event.loaded / event.total) * 100)}%`;
+        };
+        xhr.onload = () => {
+          uploadTrack.disabled = false;
+          let result;
+          try {
+            result = JSON.parse(xhr.responseText || "{}");
+          } catch {
+            result = null;
+          }
+          if (xhr.status < 200 || xhr.status >= 300) {
+            trackStatus.textContent = result?.error || `Upload failed with HTTP ${xhr.status}.`;
+            return;
+          }
+          if (!result?.id) {
+            trackStatus.textContent = "The tunnel returned an unexpected response. Reload the page and try again.";
+            return;
+          }
+          const track = result;
+          updateTrack(track);
+          trackStatus.textContent = "Upload complete — analyzing beats…";
+        };
+        xhr.onerror = () => {
+          uploadTrack.disabled = false;
+          const connection = navigator.onLine ? "the request did not reach the server" : "the phone is offline";
+          trackStatus.textContent = `Upload failed before transmission (${connection}). Reload the page and retry.`;
+        };
+        xhr.onabort = () => {
+          uploadTrack.disabled = false;
+          trackStatus.textContent = "Upload was cancelled by the browser or file provider.";
+        };
+        try {
+          xhr.send(fileBytes);
+        } catch (error) {
+          uploadTrack.disabled = false;
+          trackStatus.textContent = `Could not start upload (${error.name || "browser error"}).`;
+        }
+      }
+
       function connect() {
+        clearTimeout(socketReconnectTimer);
+        socketReconnectTimer = undefined;
         socketReady = new Promise((resolve, reject) => {
           const protocol = location.protocol === "https:" ? "wss" : "ws";
-          socket = new WebSocket(`${protocol}://${location.host}/signal`);
-          socket.onopen = () => {
-            socket.send(JSON.stringify({ type: "join", room, role: "phone" }));
-            setStatus("Ready to start"); resolve();
+          const currentSocket = new WebSocket(`${protocol}://${location.host}/signal`);
+          socket = currentSocket;
+          currentSocket.onopen = () => {
+            if (socket !== currentSocket) return;
+            socketConnected = true;
+            socketReconnectAttempt = 0;
+            currentSocket.send(JSON.stringify({ type: "join", room, role: "phone" }));
+            setStatus(cameraStream ? "Signaling reconnected — waiting for TV…" : "Ready to start");
+            renderTracks();
+            resolve();
           };
-          socket.onerror = () => reject(new Error("Could not reach signaling server"));
-          socket.onclose = () => setStatus("Disconnected — reload this page to retry");
-          socket.onmessage = (event) => {
+          currentSocket.onerror = () => {
+            if (socket !== currentSocket) return;
+            reject(new Error("Could not reach signaling server"));
+          };
+          currentSocket.onclose = () => {
+            if (socket !== currentSocket) return;
+            socketConnected = false;
+            chooseTrack.disabled = true;
+            scheduleSocketReconnect();
+          };
+          currentSocket.onmessage = (event) => {
+            if (socket !== currentSocket) return;
             const message = JSON.parse(event.data);
-            if (message.type === "signal") handleSignal(message.data).catch((error) => setStatus(error.message));
+            if (message.type === "signal") {
+              handleSignal(message.data).catch((error) => setStatus(error.message));
+            } else if (
+              cameraStream &&
+              ((message.type === "joined" && message.peers?.includes("tv")) ||
+                (message.type === "peer-joined" && message.role === "tv"))
+            ) {
+              void negotiatePoseConnection();
+            } else if (message.type === "track-progress") {
+              updateTrack(message.track);
+              trackProgress.value = message.track.progress;
+              trackStatus.textContent = message.message;
+            } else if (message.type === "track-selected") {
+              trackSelect.value = message.track.id;
+              trackStatus.textContent = `Selected for TV: ${message.track.name}`;
+            }
           };
         });
       }
-      function signal(data) { socket.send(JSON.stringify({ type: "signal", data })); }
+
+      function scheduleSocketReconnect() {
+        if (socketReconnectTimer) return;
+        const delayMs = Math.min(15_000, 1_000 * (2 ** socketReconnectAttempt));
+        socketReconnectAttempt += 1;
+        setStatus(`Server connection lost — retrying in ${Math.ceil(delayMs / 1000)}s…`);
+        socketReconnectTimer = setTimeout(connect, delayMs);
+      }
+
+      function signal(data) {
+        if (socket?.readyState !== WebSocket.OPEN) return false;
+        socket.send(JSON.stringify({ type: "signal", data }));
+        return true;
+      }
+
+      async function negotiatePoseConnection() {
+        if (!cameraStream || !socketConnected || negotiationInProgress) return;
+        clearTimeout(poseReconnectTimer);
+        poseReconnectTimer = undefined;
+        negotiationInProgress = true;
+        try {
+          const connection = createPeer();
+          await connection.setLocalDescription(await connection.createOffer());
+          if (!signal({ description: connection.localDescription })) {
+            throw new Error("Signaling disconnected during pose setup");
+          }
+          setStatus("Connecting pose channel to TV…");
+        } catch (error) {
+          setStatus(error.message || "Could not reconnect pose tracking");
+        } finally {
+          negotiationInProgress = false;
+        }
+      }
+
+      function schedulePoseReconnect() {
+        if (!cameraStream || !socketConnected || poseReconnectTimer) return;
+        setStatus("Pose connection lost — reconnecting…");
+        poseReconnectTimer = setTimeout(() => {
+          poseReconnectTimer = undefined;
+          void negotiatePoseConnection();
+        }, 1_000);
+      }
+
       function createPeer() {
         peer?.close();
         queuedCandidates = [];
-        peer = new RTCPeerConnection(rtcConfig);
-        for (const track of stream.getTracks()) peer.addTrack(track, stream);
-        peer.onicecandidate = ({ candidate }) => candidate && signal({ candidate });
-        peer.onconnectionstatechange = () => {
-          if (peer.connectionState === "connected") setStatus("Live on TV");
-          if (peer.connectionState === "failed") setStatus("Connection failed. Try reloading both screens.");
+        const connection = new RTCPeerConnection(rtcConfig);
+        peer = connection;
+        const channel = connection.createDataChannel("pose", {
+          ordered: false,
+          maxRetransmits: 0,
+        });
+        poseChannel = channel;
+        channel.bufferedAmountLowThreshold = 16 * 1024;
+        channel.onopen = () => {
+          if (poseChannel === channel) setStatus("Connected — sending pose landmarks");
         };
-        return peer;
+        channel.onclose = () => {
+          if (poseChannel === channel) schedulePoseReconnect();
+        };
+        channel.onerror = () => {
+          if (poseChannel === channel) schedulePoseReconnect();
+        };
+        connection.onicecandidate = ({ candidate }) => candidate && signal({ candidate });
+        connection.onconnectionstatechange = () => {
+          if (peer !== connection) return;
+          if (connection.connectionState === "connected" && channel.readyState !== "open") {
+            setStatus("Connected — opening pose channel…");
+          }
+          if (connection.connectionState === "failed") {
+            schedulePoseReconnect();
+          }
+        };
+        return connection;
       }
+
       async function handleSignal(data) {
         if (data.description?.type === "answer") {
           await peer.setRemoteDescription(data.description);
-          for (const candidate of queuedCandidates.splice(0)) await peer.addIceCandidate(candidate);
+          for (const candidate of queuedCandidates.splice(0)) {
+            await peer.addIceCandidate(candidate);
+          }
         } else if (data.candidate) {
           if (peer?.remoteDescription) await peer.addIceCandidate(data.candidate);
           else queuedCandidates.push(data.candidate);
         }
       }
-      async function startCamera() {
+
+      async function loadPoseLandmarker() {
+        modelStatus.textContent = "Loading pose model…";
+        try {
+          const { FilesetResolver, PoseLandmarker } = await import(visionModuleUrl);
+          const vision = await FilesetResolver.forVisionTasks(visionWasmUrl);
+          const createLandmarker = (delegate) => PoseLandmarker.createFromOptions(vision, {
+              baseOptions: { modelAssetPath: poseModelUrl, delegate },
+              runningMode: "VIDEO",
+              numPoses: 1,
+              minPoseDetectionConfidence: 0.5,
+              minPosePresenceConfidence: 0.5,
+              minTrackingConfidence: 0.5,
+              outputSegmentationMasks: false,
+            });
+
+          try {
+            poseLandmarker = await createLandmarker("GPU");
+            poseDelegate = "GPU";
+          } catch (gpuError) {
+            console.warn("GPU pose delegate unavailable; falling back to CPU", gpuError);
+            poseLandmarker = await createLandmarker("CPU");
+            poseDelegate = "CPU";
+          }
+          modelStatus.textContent = `Pose tracking ready (${poseDelegate}) — keep your upper body and both hands visible.`;
+        } catch (error) {
+          console.error("Pose model failed to load", error);
+          modelStatus.textContent = "Pose model failed to load. Reload and try again.";
+        }
+      }
+
+      function compactLandmarks(landmarks) {
+        return landmarks.map((point) => [
+          Math.round(point.x * 1000) / 1000,
+          Math.round(point.y * 1000) / 1000,
+          Math.round(point.z * 1000) / 1000,
+          Math.round((point.visibility ?? 0) * 1000) / 1000,
+        ]);
+      }
+
+      function sendPose(landmarks, timestamp, inferenceMs) {
+        if (poseChannel?.readyState !== "open") return;
+        if (poseChannel.bufferedAmount > 64 * 1024) return;
+        poseChannel.send(JSON.stringify({
+          type: "pose",
+          timestamp: Math.round(timestamp),
+          width: preview.videoWidth,
+          height: preview.videoHeight,
+          mirrored: true,
+          delegate: poseDelegate,
+          inferenceMs: Math.round(inferenceMs * 10) / 10,
+          landmarks: compactLandmarks(landmarks),
+        }));
+      }
+
+      function processPose(timestamp) {
+        if (
+          poseLandmarker &&
+          preview.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+          preview.currentTime !== lastVideoTime &&
+          timestamp - lastPoseAt >= poseIntervalMs
+        ) {
+          try {
+            const inferenceStartedAt = performance.now();
+            const result = poseLandmarker.detectForVideo(preview, timestamp);
+            sendPose(
+              result.landmarks?.[0] || [],
+              timestamp,
+              performance.now() - inferenceStartedAt,
+            );
+            lastVideoTime = preview.currentTime;
+            lastPoseAt = timestamp;
+          } catch (error) {
+            console.error("Pose frame failed", error);
+          }
+        }
+        requestAnimationFrame(processPose);
+      }
+
+      function startPoseLoop() {
+        if (poseLoopStarted) return;
+        poseLoopStarted = true;
+        requestAnimationFrame(processPose);
+      }
+
+      async function useWidestCameraView(stream) {
+        const track = stream.getVideoTracks()[0];
+        const capabilities = track?.getCapabilities?.();
+        const minimumZoom = capabilities?.zoom?.min;
+        if (typeof minimumZoom !== "number") return;
+        try {
+          await track.applyConstraints({ advanced: [{ zoom: minimumZoom }] });
+          modelStatus.textContent = `Camera set to its widest available view (${minimumZoom}×).`;
+        } catch (error) {
+          console.warn("Could not apply minimum camera zoom", error);
+        }
+      }
+
+      async function startTracking() {
         button.disabled = true;
-        setStatus("Requesting camera…");
+        setStatus("Requesting low-resolution camera…");
         try {
           await socketReady;
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: "user" },
+              width: { ideal: 480, max: 640 },
+              height: { ideal: 640, max: 640 },
+              aspectRatio: { ideal: 3 / 4 },
+              frameRate: { ideal: 24, max: 30 },
+            },
             audio: false,
           });
-          preview.srcObject = stream;
-          const connection = createPeer();
-          await connection.setLocalDescription(await connection.createOffer());
-          signal({ description: connection.localDescription });
-          setStatus("Connecting video to TV…");
-          button.textContent = "Camera started";
+          await useWidestCameraView(cameraStream);
+          preview.srcObject = cameraStream;
+          await preview.play();
+
+          await negotiatePoseConnection();
+          button.textContent = "Pose tracking started";
+          startPoseLoop();
+          void loadPoseLandmarker();
         } catch (error) {
-          setStatus(error.message || "Could not start camera");
+          setStatus(error.message || "Could not start pose tracking");
           button.disabled = false;
         }
       }
-      button.addEventListener("click", startCamera);
+
+      button.addEventListener("click", startTracking);
+      trackFile.addEventListener("change", () => {
+        const file = trackFile.files?.[0];
+        trackStatus.textContent = file
+          ? `Selected ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`
+          : "Choose an MP3, or select one already uploaded.";
+      });
+      uploadTrack.addEventListener("click", uploadSelectedTrack);
+      trackSelect.addEventListener("change", () => {
+        chooseTrack.disabled = !socketConnected || !trackSelect.value;
+      });
+      chooseTrack.addEventListener("click", () => {
+        if (!trackSelect.value || socket?.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({ type: "select-track", trackId: trackSelect.value }));
+      });
       connect();
+      void loadTracks();
     </script>
   </body>
 </html>

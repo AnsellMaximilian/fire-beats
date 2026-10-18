@@ -4,7 +4,7 @@ plugins {
 }
 
 val fireLabServerUrl = providers.gradleProperty("FIRELAB_SERVER_URL")
-    .orElse("http://10.0.2.2:3000")
+    .orElse("http://10.0.2.2:3050")
 
 android {
     namespace = "com.example.firelab"
@@ -55,6 +55,9 @@ dependencies {
     implementation(libs.androidx.tv.material)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.okhttp)
+    implementation(libs.zxing.core)
+    implementation(libs.webrtc.android)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
