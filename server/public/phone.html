@@ -38,6 +38,8 @@
       .choice:hover, .choice:focus-visible { border-color: #60a5fa; background: #172554; }
       .secondary { background: #172033; color: #dbeafe; }
       .ghost { background: transparent; color: #94a3b8; border: 1px solid #334155; }
+      .library-controls { display: grid; gap: 0.8rem; }
+      .library-controls label { margin-bottom: -0.45rem; }
       .button-row { margin-top: 0.9rem; }
       .button-row > * { flex: 1; }
       label { display: block; margin: 0.8rem 0 0.35rem; color: #cbd5e1; font-weight: 650; }
@@ -57,6 +59,13 @@
       [data-page="avatar"] .choice { min-height: 3.8rem; padding: 0.65rem 0.85rem; }
       [data-page="avatar"] #useAvatar { margin-top: 0.6rem; }
       [data-page="avatar"] .button-row { margin-top: 0.5rem; }
+      [data-page="avatar"].editing .lead { display: none; }
+      .avatar-editor { width: 7.5rem; height: 7.5rem; border: 5px solid #f8fafc; border-radius: 50%; box-shadow: 0 0 0 4px #3b82f6; cursor: grab; touch-action: none; }
+      .avatar-editor.dragging { cursor: grabbing; }
+      .avatar-adjustments { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0.55rem 0.75rem; margin: 0.1rem 0 0.65rem; }
+      .avatar-adjustments label { margin: 0; font-size: 0.82rem; }
+      .avatar-adjustments input[type="range"] { width: 100%; accent-color: #3b82f6; }
+      .avatar-hint { grid-column: 1 / -1; margin: 0; color: #94a3b8; font-size: 0.78rem; text-align: center; }
       .preview { display: block; width: min(100%, 310px); max-height: 43dvh; aspect-ratio: 3 / 4; margin: 0.8rem auto; border-radius: 22px; object-fit: cover; background: #111827; transform: scaleX(-1); }
       .model-status { min-height: 1.35rem; margin: 0.55rem 0; font-size: 0.86rem; text-align: center; }
       .summary-card { padding: 0.85rem; border: 1px solid #334155; border-radius: 18px; background: #111827; }
@@ -110,10 +119,12 @@
       <section class="page" data-page="track-library" hidden>
         <h2>Track library</h2>
         <p class="lead">Analyzed songs are available to every room on this development server.</p>
-        <label for="trackSelect">Available tracks</label>
-        <select id="trackSelect" disabled><option>Loading tracks…</option></select>
-        <button id="chooseTrack" type="button" disabled>Use selected track</button>
-        <button class="ghost" data-back="track-choice" type="button">Back</button>
+        <div class="library-controls">
+          <label for="trackSelect">Available tracks</label>
+          <select id="trackSelect" disabled><option>Loading tracks…</option></select>
+          <button id="chooseTrack" type="button" disabled>Use selected track</button>
+          <button class="ghost" data-back="track-choice" type="button">Back</button>
+        </div>
       </section>
 
       <section class="page" data-page="avatar" hidden>
@@ -122,6 +133,12 @@
         <div class="avatar-stage">
           <div id="avatarPlaceholder" class="avatar-placeholder">☺</div>
           <img id="avatarPreview" class="avatar-preview" alt="Player photo preview" hidden />
+          <canvas id="avatarEditor" class="avatar-editor" width="256" height="256" aria-label="Adjustable player photo preview" hidden></canvas>
+        </div>
+        <div id="avatarAdjustments" class="avatar-adjustments" hidden>
+          <label for="avatarZoom">Zoom</label>
+          <input id="avatarZoom" type="range" min="1" max="3" step="0.01" value="1" />
+          <p class="avatar-hint">Drag the photo to position your face inside the circle.</p>
         </div>
         <input id="cameraPhoto" type="file" accept="image/*" capture="user" hidden />
         <input id="libraryPhoto" type="file" accept="image/*" hidden />
@@ -173,6 +190,10 @@
       const libraryPhoto = document.querySelector("#libraryPhoto");
       const avatarPreview = document.querySelector("#avatarPreview");
       const avatarPlaceholder = document.querySelector("#avatarPlaceholder");
+      const avatarEditor = document.querySelector("#avatarEditor");
+      const avatarAdjustments = document.querySelector("#avatarAdjustments");
+      const avatarZoom = document.querySelector("#avatarZoom");
+      const avatarPage = document.querySelector('[data-page="avatar"]');
       const useAvatar = document.querySelector("#useAvatar");
       const lobbyAvatar = document.querySelector("#lobbyAvatar");
       const pages = [...document.querySelectorAll("[data-page]")];
@@ -201,8 +222,14 @@
       let uploadedTrackId;
       let selectedTrack;
       let selectedAvatarDataUrl;
+      let avatarSource;
+      let avatarScale = 1;
+      let avatarOffsetX = 0;
+      let avatarOffsetY = 0;
+      let avatarDrag;
 
-      const poseIntervalMs = 50;
+      const targetPoseFps = 30;
+      const poseIntervalMs = 1000 / targetPoseFps;
       const maxUploadBytes = 50 * 1024 * 1024;
       const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
       const visionModuleUrl = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs";
@@ -215,7 +242,12 @@
       }
 
       function showPage(name) {
-        pages.forEach((page) => { page.hidden = page.dataset.page !== name; });
+        window.scrollTo(0, 0);
+        pages.forEach((page) => {
+          const isActive = page.dataset.page === name;
+          page.hidden = !isActive;
+          if (isActive) page.scrollTop = 0;
+        });
         const step = name.startsWith("track-") ? 1 : name === "avatar" ? 2 : 3;
         stepIndicators.forEach((indicator) => {
           indicator.classList.toggle("active", Number(indicator.dataset.step) <= step);
@@ -372,37 +404,66 @@
         }
       }
 
+      function clampAvatarOffsets() {
+        if (!avatarSource) return;
+        const baseScale = Math.max(
+          avatarEditor.width / avatarSource.width,
+          avatarEditor.height / avatarSource.height,
+        );
+        const drawnWidth = avatarSource.width * baseScale * avatarScale;
+        const drawnHeight = avatarSource.height * baseScale * avatarScale;
+        avatarOffsetX = Math.max(
+          -(drawnWidth - avatarEditor.width) / 2,
+          Math.min((drawnWidth - avatarEditor.width) / 2, avatarOffsetX),
+        );
+        avatarOffsetY = Math.max(
+          -(drawnHeight - avatarEditor.height) / 2,
+          Math.min((drawnHeight - avatarEditor.height) / 2, avatarOffsetY),
+        );
+      }
+
+      function renderAvatarEditor() {
+        if (!avatarSource) return;
+        clampAvatarOffsets();
+        const context = avatarEditor.getContext("2d", { alpha: false });
+        const baseScale = Math.max(
+          avatarEditor.width / avatarSource.width,
+          avatarEditor.height / avatarSource.height,
+        );
+        const drawnWidth = avatarSource.width * baseScale * avatarScale;
+        const drawnHeight = avatarSource.height * baseScale * avatarScale;
+        context.fillStyle = "#0f172a";
+        context.fillRect(0, 0, avatarEditor.width, avatarEditor.height);
+        context.drawImage(
+          avatarSource,
+          (avatarEditor.width - drawnWidth) / 2 + avatarOffsetX,
+          (avatarEditor.height - drawnHeight) / 2 + avatarOffsetY,
+          drawnWidth,
+          drawnHeight,
+        );
+        selectedAvatarDataUrl = avatarEditor.toDataURL("image/jpeg", 0.82);
+        useAvatar.disabled = socket?.readyState !== WebSocket.OPEN;
+      }
+
       async function prepareAvatar(file) {
         if (!file) return;
         useAvatar.disabled = true;
         setStatus("Preparing player photo…");
         try {
-          const image = await createImageBitmap(file, { imageOrientation: "from-image" });
-          const canvas = document.createElement("canvas");
-          canvas.width = 256;
-          canvas.height = 256;
-          const context = canvas.getContext("2d", { alpha: false });
-          const cropSize = Math.min(image.width, image.height);
-          const sourceX = (image.width - cropSize) / 2;
-          const sourceY = (image.height - cropSize) / 2;
-          context.drawImage(
-            image,
-            sourceX,
-            sourceY,
-            cropSize,
-            cropSize,
-            0,
-            0,
-            canvas.width,
-            canvas.height,
-          );
-          image.close();
-          selectedAvatarDataUrl = canvas.toDataURL("image/jpeg", 0.82);
-          avatarPreview.src = selectedAvatarDataUrl;
-          avatarPreview.hidden = false;
+          avatarSource?.close?.();
+          avatarSource = undefined;
+          avatarSource = await createImageBitmap(file, { imageOrientation: "from-image" });
+          avatarScale = 1;
+          avatarOffsetX = 0;
+          avatarOffsetY = 0;
+          avatarZoom.value = "1";
+          avatarPreview.hidden = true;
           avatarPlaceholder.hidden = true;
-          useAvatar.disabled = false;
-          setStatus("Photo ready — confirm it below");
+          avatarEditor.hidden = false;
+          avatarAdjustments.hidden = false;
+          avatarPage.classList.add("editing");
+          renderAvatarEditor();
+          setStatus("Photo ready — drag and zoom to adjust it");
         } catch (error) {
           console.error("Avatar image failed", error);
           setStatus("Could not read that photo. Try a JPEG or PNG image.");
@@ -438,6 +499,7 @@
             if (selectedAvatarDataUrl) {
               currentSocket.send(JSON.stringify({ type: "set-avatar", dataUrl: selectedAvatarDataUrl }));
             }
+            useAvatar.disabled = !selectedAvatarDataUrl;
             setStatus(cameraStream ? "Signaling reconnected — waiting for TV…" : "Ready to start");
             renderTracks();
             resolve();
@@ -474,9 +536,14 @@
               updateLobby();
             } else if (message.type === "avatar-selected") {
               selectedAvatarDataUrl = message.dataUrl;
-              avatarPreview.src = selectedAvatarDataUrl;
-              avatarPreview.hidden = false;
-              avatarPlaceholder.hidden = true;
+              if (!avatarSource) {
+                avatarPreview.src = selectedAvatarDataUrl;
+                avatarPreview.hidden = false;
+                avatarPlaceholder.hidden = true;
+                avatarEditor.hidden = true;
+                avatarAdjustments.hidden = true;
+                avatarPage.classList.remove("editing");
+              }
               useAvatar.disabled = false;
               updateLobby();
             } else if (message.type === "error") {
@@ -596,7 +663,7 @@
             poseLandmarker = await createLandmarker("CPU");
             poseDelegate = "CPU";
           }
-          modelStatus.textContent = `Pose tracking ready (${poseDelegate}) — keep your upper body and both hands visible.`;
+          modelStatus.textContent = `Pose tracking ready (${poseDelegate}, targeting ${targetPoseFps} FPS) — keep your upper body and both hands visible.`;
         } catch (error) {
           console.error("Pose model failed to load", error);
           modelStatus.textContent = "Pose model failed to load. Reload and try again.";
@@ -678,10 +745,10 @@
           cameraStream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: { ideal: "user" },
-              width: { ideal: 480, max: 640 },
-              height: { ideal: 640, max: 640 },
+              width: { ideal: 360, max: 480 },
+              height: { ideal: 480, max: 480 },
               aspectRatio: { ideal: 3 / 4 },
-              frameRate: { ideal: 24, max: 30 },
+              frameRate: { ideal: 30, max: 30 },
             },
             audio: false,
           });
@@ -721,8 +788,38 @@
       chooseTrack.addEventListener("click", () => selectTrackAndContinue(trackSelect.value));
       document.querySelector("#takePhoto").addEventListener("click", () => cameraPhoto.click());
       document.querySelector("#choosePhoto").addEventListener("click", () => libraryPhoto.click());
-      cameraPhoto.addEventListener("change", () => void prepareAvatar(cameraPhoto.files?.[0]));
-      libraryPhoto.addEventListener("change", () => void prepareAvatar(libraryPhoto.files?.[0]));
+      const handlePhotoSelection = async (input) => {
+        await prepareAvatar(input.files?.[0]);
+        input.value = "";
+      };
+      cameraPhoto.addEventListener("change", () => void handlePhotoSelection(cameraPhoto));
+      libraryPhoto.addEventListener("change", () => void handlePhotoSelection(libraryPhoto));
+      avatarZoom.addEventListener("input", () => {
+        avatarScale = Number(avatarZoom.value);
+        renderAvatarEditor();
+      });
+      avatarEditor.addEventListener("pointerdown", (event) => {
+        if (!avatarSource) return;
+        avatarDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+        avatarEditor.setPointerCapture(event.pointerId);
+        avatarEditor.classList.add("dragging");
+      });
+      avatarEditor.addEventListener("pointermove", (event) => {
+        if (!avatarDrag || avatarDrag.pointerId !== event.pointerId) return;
+        const bounds = avatarEditor.getBoundingClientRect();
+        const displayScale = avatarEditor.width / bounds.width;
+        avatarOffsetX += (event.clientX - avatarDrag.x) * displayScale;
+        avatarOffsetY += (event.clientY - avatarDrag.y) * displayScale;
+        avatarDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+        renderAvatarEditor();
+      });
+      const finishAvatarDrag = (event) => {
+        if (avatarDrag?.pointerId !== event.pointerId) return;
+        avatarDrag = undefined;
+        avatarEditor.classList.remove("dragging");
+      };
+      avatarEditor.addEventListener("pointerup", finishAvatarDrag);
+      avatarEditor.addEventListener("pointercancel", finishAvatarDrag);
       useAvatar.addEventListener("click", confirmAvatar);
       document.querySelector("#skipAvatar").addEventListener("click", () => {
         updateLobby();
