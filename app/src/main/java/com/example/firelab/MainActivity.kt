@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -66,6 +67,7 @@ import kotlinx.coroutines.isActive
 import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
     private lateinit var receiver: ReceiverController
@@ -126,11 +128,17 @@ private fun PoseScreen(state: ReceiverUiState) {
     val currentFrame by rememberUpdatedState(incomingFrame)
     val selectedTrack = state.selectedTrack
     val currentTrack by rememberUpdatedState(selectedTrack)
+    val generatedChart = remember(selectedTrack?.id) {
+        selectedTrack?.let(::generateBeatChart).orEmpty()
+    }
+    val currentChart by rememberUpdatedState(generatedChart)
+    val currentInferenceMs by rememberUpdatedState(state.poseInferenceMs)
     var displayedFrame by remember { mutableStateOf<PoseFrame?>(null) }
     val frame = displayedFrame ?: incomingFrame
     var activeNotes by remember { mutableStateOf(emptyList<BeatNote>()) }
     var score by remember { mutableIntStateOf(0) }
     var misses by remember { mutableIntStateOf(0) }
+    var combo by remember { mutableIntStateOf(0) }
     var nextBeatIndex by remember { mutableIntStateOf(0) }
     var songPositionSeconds by remember { mutableFloatStateOf(0f) }
     var preRollRemainingSeconds by remember { mutableFloatStateOf(NOTE_TRAVEL_SECONDS) }
@@ -149,12 +157,33 @@ private fun PoseScreen(state: ReceiverUiState) {
     val avatarBitmap = remember(state.avatarDataUrl) {
         decodeAvatarBitmap(state.avatarDataUrl)?.asImageBitmap()
     }
-    val targetLabelPaint = remember {
-        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            color = android.graphics.Color.WHITE
-            textAlign = android.graphics.Paint.Align.CENTER
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
+    val redFireBitmap = remember {
+        BitmapFactory.decodeResource(
+            context.resources,
+            R.drawable.fire_note_red,
+            BitmapFactory.Options().apply { inSampleSize = 4 }
+        ).asImageBitmap()
+    }
+    val blueFireBitmap = remember {
+        BitmapFactory.decodeResource(
+            context.resources,
+            R.drawable.fire_note_blue,
+            BitmapFactory.Options().apply { inSampleSize = 4 }
+        ).asImageBitmap()
+    }
+    val sleepingTargetBitmap = remember {
+        BitmapFactory.decodeResource(
+            context.resources,
+            R.drawable.stone_target_sleeping,
+            BitmapFactory.Options().apply { inSampleSize = 4 }
+        ).asImageBitmap()
+    }
+    val awakeTargetBitmap = remember {
+        BitmapFactory.decodeResource(
+            context.resources,
+            R.drawable.stone_target_awake,
+            BitmapFactory.Options().apply { inSampleSize = 4 }
+        ).asImageBitmap()
     }
     val scorePopupPaint = remember {
         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
@@ -179,6 +208,7 @@ private fun PoseScreen(state: ReceiverUiState) {
         activeNotes = emptyList()
         score = 0
         misses = 0
+        combo = 0
         nextBeatIndex = 0
         songPositionSeconds = 0f
         preRollRemainingSeconds = NOTE_TRAVEL_SECONDS
@@ -188,6 +218,10 @@ private fun PoseScreen(state: ReceiverUiState) {
         hitEffects = emptyList()
         scorePopup = null
         selectedTrack?.let { track ->
+            Log.i(
+                "FireTV",
+                "Gameplay chart generated; sourceBeats=${track.beats.size} notes=${generatedChart.size}"
+            )
             beatAudioPlayer.load(
                 url = track.audioUrl,
                 onReady = { audioReady = true },
@@ -312,6 +346,7 @@ private fun PoseScreen(state: ReceiverUiState) {
                                     )
                                 readyProgress = 0f
                                 score = 0
+                                combo = 0
                                 Log.i("FireTV", "Four-corner calibration locked; bounds=$calibration")
                             }
                         }
@@ -341,51 +376,73 @@ private fun PoseScreen(state: ReceiverUiState) {
             }
             songPositionSeconds = songTime
             val notes = activeNotes.toMutableList()
+            val chart = currentChart
+            val lateHitWindowSeconds = noteLateHitWindowSeconds(currentInferenceMs)
             var beatIndex = nextBeatIndex
             while (
-                beatIndex < track.beats.size &&
-                track.beats[beatIndex] - NOTE_TRAVEL_SECONDS <= songTime
+                beatIndex < chart.size &&
+                chart[beatIndex].beatTimeSeconds - NOTE_TRAVEL_SECONDS <= songTime
             ) {
-                if (track.beats[beatIndex] + NOTE_MISS_WINDOW_SECONDS >= songTime) {
-                    notes += BeatNote(
-                        beatIndex = beatIndex,
-                        beatTimeSeconds = track.beats[beatIndex],
-                        laneIndex = beatIndex % beatLanes.size
-                    )
+                val chartNote = chart[beatIndex]
+                if (chartNote.beatTimeSeconds + lateHitWindowSeconds >= songTime) {
+                    notes += chartNote
                 }
                 beatIndex += 1
             }
             nextBeatIndex = beatIndex
 
-            val missed = notes.count { note ->
-                songTime > note.beatTimeSeconds + NOTE_MISS_WINDOW_SECONDS
+            val missedApproaches = notes.count { note ->
+                songTime > note.beatTimeSeconds + lateHitWindowSeconds
             }
-            val hittableNotes = notes.filter { note ->
-                songTime <= note.beatTimeSeconds + NOTE_MISS_WINDOW_SECONDS
+            val playableNotes = notes.filter { note ->
+                songTime <= note.beatTimeSeconds + lateHitWindowSeconds
             }
 
-            val hitNotes = mutableListOf<BeatNote>()
-            val survivors = if (pose != null && canvasSize != IntSize.Zero) {
-                hittableNotes.filterNot { note ->
-                    noteHitsFist(note, songTime, pose, canvasSize, calibration).also { hit ->
-                        if (hit) hitNotes += note
-                    }
+            val survivors = mutableListOf<BeatNote>()
+            val newHitEffects = mutableListOf<HitEffect>()
+            playableNotes.forEach { note ->
+                val hit = pose != null && canvasSize != IntSize.Zero && noteHitsFist(
+                    note = note,
+                    songTime = songTime,
+                    frame = pose,
+                    canvasSize = canvasSize,
+                    calibration = calibration,
+                    inferenceMs = currentInferenceMs
+                )
+                if (hit) {
+                    newHitEffects += HitEffect(
+                        laneIndex = note.laneIndex,
+                        hand = note.hand
+                    )
+                } else {
+                    survivors += note
                 }
-            } else {
-                hittableNotes
             }
 
             activeNotes = survivors
-            if (missed > 0) misses += missed
-            val hits = hitNotes.size
-            if (hits > 0) {
-                score += hits
-                hitEffects = hitEffects + hitNotes.map { note ->
-                    HitEffect(laneIndex = note.laneIndex)
+            if (missedApproaches > 0) {
+                misses += missedApproaches
+                combo = 0
+            }
+            val scoringEvents = newHitEffects.size
+            if (scoringEvents > 0) {
+                var pointsAwarded = 0
+                repeat(scoringEvents) {
+                    combo += 1
+                    pointsAwarded += comboMultiplier(combo)
                 }
-                scorePopup = ScorePopup(points = hits)
-                repeat(hits.coerceAtMost(3)) { popSoundPlayer.play() }
-                Log.i("FireTV", "Beat target hit; score=$score misses=$misses")
+                score += pointsAwarded
+                hitEffects = hitEffects + newHitEffects
+                scorePopup = ScorePopup(
+                    points = pointsAwarded,
+                    multiplier = comboMultiplier(combo)
+                )
+                repeat(scoringEvents.coerceAtMost(3)) { popSoundPlayer.play() }
+                Log.i(
+                    "FireTV",
+                    "Gameplay score event; events=$scoringEvents score=$score combo=$combo " +
+                        "multiplier=${comboMultiplier(combo)} misses=$misses"
+                )
             }
         }
     }
@@ -403,66 +460,67 @@ private fun PoseScreen(state: ReceiverUiState) {
             val activeBounds = calibration
             if (activeBounds != null && selectedTrack != null) {
                 val center = Offset(size.width / 2f, size.height / 2f)
-                val hitRadius = HIT_TARGET_RADIUS * min(size.width, size.height)
+                val targetHalfSize = HIT_TARGET_HALF_SIZE * min(size.width, size.height)
                 beatLanes.forEachIndexed { laneIndex, lane ->
                     val targetCenter = lane.position(size.width, size.height)
                     val highlighted = activeNotes.any { note ->
-                        note.laneIndex == laneIndex &&
-                            kotlin.math.abs(songPositionSeconds - note.beatTimeSeconds) <=
-                            NOTE_HIT_WINDOW_SECONDS
+                        note.laneIndex == laneIndex && note.isInsideHitWindow(
+                            songTime = songPositionSeconds,
+                            inferenceMs = state.poseInferenceMs
+                        )
                     }
+                    val scale = if (highlighted) 1.08f else 1f
+                    val halfSize = targetHalfSize * scale
+                    val targetSize = (halfSize * 2f).roundToInt()
                     drawLine(
-                        color = lane.hand.color.copy(alpha = 0.12f),
+                        color = Color.White.copy(alpha = 0.08f),
                         start = center,
                         end = targetCenter,
                         strokeWidth = 4f
                     )
-                    drawCircle(
-                        color = lane.hand.color.copy(alpha = if (highlighted) 0.72f else 0.16f),
-                        radius = hitRadius * if (highlighted) 1.12f else 1f,
-                        center = targetCenter
+                    drawImage(
+                        image = if (highlighted) awakeTargetBitmap else sleepingTargetBitmap,
+                        dstOffset = IntOffset(
+                            x = (targetCenter.x - halfSize).roundToInt(),
+                            y = (targetCenter.y - halfSize).roundToInt()
+                        ),
+                        dstSize = IntSize(targetSize, targetSize)
                     )
-                    drawCircle(
-                        color = if (highlighted) Color.White else lane.hand.color,
-                        radius = hitRadius * if (highlighted) 1.12f else 1f,
-                        center = targetCenter,
-                        style = Stroke(width = if (highlighted) 10f else 6f)
-                    )
-                    targetLabelPaint.textSize = hitRadius * 0.9f
-                    val baseline = targetCenter.y -
-                        (targetLabelPaint.ascent() + targetLabelPaint.descent()) / 2f
-                    drawContext.canvas.nativeCanvas.drawText(
-                        lane.hand.label,
-                        targetCenter.x,
-                        baseline,
-                        targetLabelPaint
-                    )
+                    if (highlighted) {
+                        drawRect(
+                            color = Color.White.copy(alpha = 0.72f),
+                            topLeft = Offset(
+                                targetCenter.x - targetHalfSize,
+                                targetCenter.y - targetHalfSize
+                            ),
+                            size = Size(targetHalfSize * 2f, targetHalfSize * 2f),
+                            style = Stroke(width = 6f)
+                        )
+                    }
                 }
             }
 
             activeNotes.forEach { note ->
-                val lane = beatLanes[note.laneIndex]
-                val radius = NOTE_RADIUS * min(size.width, size.height)
                 val center = note.position(songPositionSeconds, size.width, size.height)
+                val spriteHalfSize = NOTE_SPRITE_HALF_SIZE * min(size.width, size.height)
+                val spriteSize = (spriteHalfSize * 2f).roundToInt()
+                val fireBitmap = if (note.hand == TargetHand.LEFT) {
+                    redFireBitmap
+                } else {
+                    blueFireBitmap
+                }
                 drawCircle(
-                    color = lane.hand.color,
-                    radius = radius,
+                    color = note.hand.color.copy(alpha = 0.18f),
+                    radius = spriteHalfSize * 0.72f,
                     center = center
                 )
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.85f),
-                    radius = radius,
-                    center = center,
-                    style = Stroke(width = 4f)
-                )
-                targetLabelPaint.textSize = radius * 1.05f
-                val labelBaseline = center.y -
-                    (targetLabelPaint.ascent() + targetLabelPaint.descent()) / 2f
-                drawContext.canvas.nativeCanvas.drawText(
-                    lane.hand.label,
-                    center.x,
-                    labelBaseline,
-                    targetLabelPaint
+                drawImage(
+                    image = fireBitmap,
+                    dstOffset = IntOffset(
+                        x = (center.x - spriteHalfSize).roundToInt(),
+                        y = (center.y - spriteHalfSize).roundToInt()
+                    ),
+                    dstSize = IntSize(spriteSize, spriteSize)
                 )
             }
 
@@ -470,11 +528,11 @@ private fun PoseScreen(state: ReceiverUiState) {
                 val progress = (effect.ageSeconds / HIT_EFFECT_SECONDS).coerceIn(0f, 1f)
                 val lane = beatLanes[effect.laneIndex]
                 val center = lane.position(size.width, size.height)
-                val baseRadius = HIT_TARGET_RADIUS * min(size.width, size.height)
+                val baseRadius = HIT_TARGET_HALF_SIZE * 0.82f * min(size.width, size.height)
                 val radius = baseRadius * (1f + progress * 0.9f)
                 val alpha = (1f - progress) * 0.75f
                 drawCircle(
-                    color = lane.hand.color.copy(alpha = alpha * 0.35f),
+                    color = effect.hand.color.copy(alpha = alpha * 0.35f),
                     radius = radius,
                     center = center
                 )
@@ -687,6 +745,15 @@ private fun PoseScreen(state: ReceiverUiState) {
                     size.height / 2f - progress * 90f,
                     scorePopupPaint
                 )
+                if (popup.multiplier > 1) {
+                    scorePopupPaint.textSize = 38f * easedScale
+                    drawContext.canvas.nativeCanvas.drawText(
+                        "x${popup.multiplier} COMBO",
+                        size.width / 2f,
+                        size.height / 2f + 52f - progress * 90f,
+                        scorePopupPaint
+                    )
+                }
             }
         }
 
@@ -717,8 +784,9 @@ private fun PoseScreen(state: ReceiverUiState) {
         }
 
         if (calibration != null) {
+            val multiplier = comboMultiplier(combo)
             Text(
-                text = "Score  $score   •   Miss  $misses",
+                text = "Score  $score   •   Combo  $combo  x$multiplier   •   Miss  $misses",
                 color = Color.White,
                 fontSize = 32.sp,
                 modifier = Modifier
@@ -793,23 +861,25 @@ private fun PoseScreen(state: ReceiverUiState) {
 private data class BeatNote(
     val beatIndex: Int,
     val beatTimeSeconds: Float,
-    val laneIndex: Int
+    val laneIndex: Int,
+    val hand: TargetHand
 )
 
 private data class HitEffect(
     val laneIndex: Int,
+    val hand: TargetHand,
     val ageSeconds: Float = 0f
 )
 
 private data class ScorePopup(
     val points: Int,
+    val multiplier: Int,
     val ageSeconds: Float = 0f
 )
 
 private data class BeatLane(
     val x: Float,
-    val y: Float,
-    val hand: TargetHand
+    val y: Float
 ) {
     fun position(width: Float, height: Float): Offset = Offset(x * width, y * height)
 }
@@ -824,12 +894,11 @@ private fun BeatNote.position(songTime: Float, width: Float, height: Float): Off
 }
 
 private enum class TargetHand(
-    val label: String,
     val color: Color,
     val wristIndex: Int
 ) {
-    LEFT("L", Color(0xFFEF4444), 15),
-    RIGHT("R", Color(0xFF3B82F6), 16)
+    LEFT(Color(0xFFFF3218), 15),
+    RIGHT(Color(0xFF00BFF3), 16)
 }
 
 private enum class CalibrationStage {
@@ -904,45 +973,110 @@ private const val CALIBRATION_SMOOTHING = 0.22f
 private const val READY_HOLD_SECONDS = 0.7f
 private const val POSE_INTERPOLATION_SECONDS = 0.06f
 private const val NOTE_TRAVEL_SECONDS = 1.6f
-private const val NOTE_HIT_WINDOW_SECONDS = 0.18f
-private const val NOTE_MISS_WINDOW_SECONDS = 0.32f
-private const val NOTE_RADIUS = 0.045f
-private const val HIT_TARGET_RADIUS = 0.105f
+private const val NOTE_EARLY_HIT_WINDOW_SECONDS = 0.18f
+private const val NOTE_BASE_LATE_HIT_WINDOW_SECONDS = 0.34f
+private const val NOTE_MAX_INFERENCE_COMPENSATION_SECONDS = 0.16f
+private const val NOTE_DENSITY_WINDOW_SECONDS = 1.25f
+private const val NOTE_MIN_GAP_SECONDS = 0.32f
+private const val MAX_NOTES_PER_DENSITY_WINDOW = 2
+private const val NOTE_SPRITE_HALF_SIZE = 0.060f
+private const val HIT_TARGET_HALF_SIZE = 0.145f
 private const val FIST_RADIUS = 0.03f
 private const val HIT_EFFECT_SECONDS = 0.48f
 private const val SCORE_POPUP_SECONDS = 0.72f
-
+private const val HITS_PER_MULTIPLIER = 5
+private const val MAX_COMBO_MULTIPLIER = 4
 private val targetHands = TargetHand.values().toList()
 private val beatLanes = listOf(
-    BeatLane(0.15f, 0.20f, TargetHand.LEFT),
-    BeatLane(0.85f, 0.20f, TargetHand.RIGHT),
-    BeatLane(0.15f, 0.80f, TargetHand.LEFT),
-    BeatLane(0.85f, 0.80f, TargetHand.RIGHT)
+    BeatLane(0.15f, 0.20f),
+    BeatLane(0.85f, 0.20f),
+    BeatLane(0.15f, 0.80f),
+    BeatLane(0.85f, 0.80f)
 )
+
+private fun generateBeatChart(track: BeatTrack): List<BeatNote> {
+    val random = Random(track.id.hashCode())
+    val recentNotes = mutableListOf<Float>()
+    var lastAcceptedTime = Float.NEGATIVE_INFINITY
+    var lastLaneIndex = -1
+    var lastHand: TargetHand? = null
+    var sameHandStreak = 0
+
+    return buildList {
+        track.beats.forEachIndexed { sourceIndex, beatTime ->
+            recentNotes.removeAll { previous ->
+                beatTime - previous > NOTE_DENSITY_WINDOW_SECONDS
+            }
+            if (
+                beatTime - lastAcceptedTime < NOTE_MIN_GAP_SECONDS ||
+                recentNotes.size >= MAX_NOTES_PER_DENSITY_WINDOW
+            ) {
+                return@forEachIndexed
+            }
+
+            val candidateLanes = beatLanes.indices.filter { it != lastLaneIndex }
+            val laneIndex = candidateLanes[random.nextInt(candidateLanes.size)]
+            val candidateHands = targetHands.filter { hand ->
+                sameHandStreak < 2 || hand != lastHand
+            }
+            val hand = candidateHands[random.nextInt(candidateHands.size)]
+            sameHandStreak = if (hand == lastHand) sameHandStreak + 1 else 1
+            lastHand = hand
+            lastLaneIndex = laneIndex
+            lastAcceptedTime = beatTime
+            recentNotes += beatTime
+            add(
+                BeatNote(
+                    beatIndex = sourceIndex,
+                    beatTimeSeconds = beatTime,
+                    laneIndex = laneIndex,
+                    hand = hand
+                )
+            )
+        }
+    }
+}
+
+private fun noteLateHitWindowSeconds(inferenceMs: Float): Float =
+    NOTE_BASE_LATE_HIT_WINDOW_SECONDS +
+        (inferenceMs / 1000f).coerceIn(0f, NOTE_MAX_INFERENCE_COMPENSATION_SECONDS)
+
+private fun BeatNote.isInsideHitWindow(songTime: Float, inferenceMs: Float): Boolean {
+    val difference = songTime - beatTimeSeconds
+    return difference >= -NOTE_EARLY_HIT_WINDOW_SECONDS &&
+        difference <= noteLateHitWindowSeconds(inferenceMs)
+}
+
+private fun comboMultiplier(combo: Int): Int =
+    (1 + combo / HITS_PER_MULTIPLIER).coerceAtMost(MAX_COMBO_MULTIPLIER)
 
 private fun noteHitsFist(
     note: BeatNote,
     songTime: Float,
     frame: PoseFrame,
     canvasSize: IntSize,
-    calibration: PoseBounds?
+    calibration: PoseBounds?,
+    inferenceMs: Float
 ): Boolean {
-    if (kotlin.math.abs(songTime - note.beatTimeSeconds) > NOTE_HIT_WINDOW_SECONDS) {
+    if (!note.isInsideHitWindow(songTime, inferenceMs)) {
         return false
     }
     val width = canvasSize.width.toFloat()
     val height = canvasSize.height.toFloat()
     val lane = beatLanes[note.laneIndex]
-    val center = note.position(songTime, width, height)
+    val center = lane.position(width, height)
     val fist = frame.screenPoint(
-        lane.hand.wristIndex,
+        note.hand.wristIndex,
         width,
         height,
         calibration
     ) ?: return false
-    val collisionRadius = (HIT_TARGET_RADIUS + FIST_RADIUS) * min(width, height)
-    return (center - fist).getDistance() <= collisionRadius
+    val halfSize = (HIT_TARGET_HALF_SIZE + FIST_RADIUS) * min(width, height)
+    return fist.isInsideSquare(center, halfSize)
 }
+
+private fun Offset.isInsideSquare(center: Offset, halfSize: Float): Boolean =
+    kotlin.math.abs(x - center.x) <= halfSize && kotlin.math.abs(y - center.y) <= halfSize
 
 private fun calibrationBounds(
     top: CalibrationHands?,

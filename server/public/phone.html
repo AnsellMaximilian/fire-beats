@@ -38,8 +38,9 @@
       .choice:hover, .choice:focus-visible { border-color: #60a5fa; background: #172554; }
       .secondary { background: #172033; color: #dbeafe; }
       .ghost { background: transparent; color: #94a3b8; border: 1px solid #334155; }
-      .library-controls { display: grid; gap: 0.8rem; }
-      .library-controls label { margin-bottom: -0.45rem; }
+      .library-controls, .upload-controls { display: grid; gap: 0.8rem; }
+      .library-controls label, .upload-controls label { margin-bottom: -0.45rem; }
+      .upload-controls progress, .upload-controls .compact-status { margin: 0; }
       .button-row { margin-top: 0.9rem; }
       .button-row > * { flex: 1; }
       label { display: block; margin: 0.8rem 0 0.35rem; color: #cbd5e1; font-weight: 650; }
@@ -107,13 +108,15 @@
       <section class="page" data-page="track-upload" hidden>
         <h2>Upload a track</h2>
         <p class="lead">MP3 files up to 50 MB work best for this prototype.</p>
-        <label for="trackFile">MP3 file</label>
-        <input id="trackFile" type="file" />
-        <button id="uploadTrack" type="button">Upload and analyze</button>
-        <progress id="trackProgress" max="100" value="0"></progress>
-        <p id="trackStatus" class="muted compact-status">Choose an MP3 to continue.</p>
-        <button id="useUploadedTrack" type="button" disabled>Continue with this track</button>
-        <button class="ghost" data-back="track-choice" type="button">Back</button>
+        <div class="upload-controls">
+          <label for="trackFile">MP3 file</label>
+          <input id="trackFile" type="file" />
+          <button id="uploadTrack" type="button">Upload and analyze</button>
+          <progress id="trackProgress" max="100" value="0"></progress>
+          <p id="trackStatus" class="muted compact-status">Choose an MP3 to continue.</p>
+          <button id="useUploadedTrack" type="button" disabled>Continue with this track</button>
+          <button class="ghost" data-back="track-choice" type="button">Back</button>
+        </div>
       </section>
 
       <section class="page" data-page="track-library" hidden>
