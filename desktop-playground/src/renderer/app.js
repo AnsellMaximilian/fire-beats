@@ -6,7 +6,7 @@ const elements = Object.fromEntries(
     "maxBpm", "delta", "deltaValue", "currentBpm", "currentCount", "adaptiveCount",
     "onsetCount", "audioDetails", "showCurrent", "showAdaptive", "showOnsets", "showManual",
     "addMarkerButton", "clearMarkersButton", "markerCount", "statusBanner", "statusText",
-    "playButton", "timeLabel", "scrubber", "timelineCanvas", "zoom", "zoomValue", "pan",
+    "playButton", "timeLabel", "volume", "volumeValue", "scrubber", "timelineCanvas", "zoom", "zoomValue", "pan",
     "followPlayhead", "chartSource", "resetGameButton", "gameCanvas", "hitCount", "missCount",
     "lastOffset", "meanOffset", "audio",
   ].map((id) => [id, document.getElementById(id)]),
@@ -81,6 +81,12 @@ function analysisOptions() {
     delta: Number(elements.delta.value),
     channelMode: elements.channelMode.value,
   };
+}
+
+function updateVolume() {
+  const percent = Number(elements.volume.value);
+  elements.audio.volume = percent / 100;
+  elements.volumeValue.textContent = percent === 0 ? "Muted" : `${percent}%`;
 }
 
 function mimeFor(name) {
@@ -185,7 +191,10 @@ async function exportAnalysis() {
       format: "firelab-audio-analysis-v1",
       createdAt: new Date().toISOString(),
       file: { name: selectedFile.name, size: selectedFile.size },
-      settings: analysisOptions(),
+      settings: {
+        ...analysisOptions(),
+        playbackVolume: elements.audio.volume,
+      },
       analysis: {
         sampleRate: analysis.sampleRate,
         channelCount: analysis.channelCount,
@@ -555,6 +564,7 @@ elements.addMarkerButton.addEventListener("click", addManualMarker);
 elements.clearMarkersButton.addEventListener("click", clearMarkers);
 elements.resetGameButton.addEventListener("click", resetGame);
 elements.chartSource.addEventListener("change", resetGame);
+elements.volume.addEventListener("input", updateVolume);
 elements.delta.addEventListener("input", () => {
   elements.deltaValue.textContent = Number(elements.delta.value).toFixed(2);
 });
@@ -608,4 +618,5 @@ window.addEventListener("beforeunload", () => {
 });
 
 setControlsEnabled(false);
+updateVolume();
 requestAnimationFrame(frame);

@@ -72,6 +72,9 @@ kbd { min-width: 22px; padding: 2px 6px; border: 1px solid #53637a; border-botto
 .transport, .game-controls { display: flex; align-items: center; gap: 10px; }
 .round-button { width: 36px; height: 36px; border-radius: 50%; background: #e9f8ff; color: #0c1724; font-size: 14px; }
 .time-label { min-width: 144px; color: #aab7c9; font: 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.volume-control { margin: 0 0 0 5px; display: grid; grid-template-columns: auto 92px 34px; align-items: center; gap: 8px; color: #8190a7; font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase; }
+.volume-control input { width: 92px; }
+.volume-control output { color: #c4d2e4; font: 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace; text-align: right; }
 .scrubber { display: block; margin: 13px 0 8px; }
 .timeline-canvas { width: 100%; height: 264px; display: block; border: 1px solid #223149; border-radius: 11px; background: #080d16; cursor: crosshair; }
 .view-controls { min-height: 39px; margin-top: 9px; display: grid; grid-template-columns: auto minmax(90px, 0.5fr) auto minmax(130px, 1fr) auto; align-items: center; gap: 10px; }

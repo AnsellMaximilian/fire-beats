@@ -180,20 +180,31 @@ function createWindow() {
         }
         const interaction = await window.webContents.executeJavaScript(`(() => {
           const audio = document.getElementById('audio');
+          const volume = document.getElementById('volume');
+          volume.value = '35';
+          volume.dispatchEvent(new Event('input', { bubbles: true }));
           audio.currentTime = 0.023;
           document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyQ', bubbles: true }));
           document.getElementById('addMarkerButton').click();
           return {
             hits: document.getElementById('hitCount').textContent,
-            markers: document.getElementById('markerCount').textContent
+            markers: document.getElementById('markerCount').textContent,
+            volume: audio.volume,
+            volumeLabel: document.getElementById('volumeValue').textContent
           };
         })()`);
-        if (interaction.hits !== "1" || interaction.markers !== "1 marker") {
+        if (
+          interaction.hits !== "1"
+          || interaction.markers !== "1 marker"
+          || Math.abs(interaction.volume - 0.35) > 0.001
+          || interaction.volumeLabel !== "35%"
+        ) {
           throw new Error(`Smoke interaction failed: ${JSON.stringify(interaction)}`);
         }
+        await delay(100);
         const image = await window.webContents.capturePage();
         await fs.writeFile(path.resolve(process.env.FIRELAB_CAPTURE_PATH), image.toPNG());
-        console.log(`[FireLab] Smoke capture complete: ${state.status} Hit and marker controls passed.`);
+        console.log(`[FireLab] Smoke capture complete: ${state.status} Hit, marker, and volume controls passed.`);
         app.exit(0);
       } catch (error) {
         console.error("[FireLab] Smoke capture failed", error);

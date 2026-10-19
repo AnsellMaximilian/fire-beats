@@ -87,6 +87,11 @@
               <div class="transport">
                 <button id="playButton" class="round-button" disabled aria-label="Play or pause">▶</button>
                 <span id="timeLabel" class="time-label">0:00.000 / 0:00.000</span>
+                <label class="volume-control" for="volume">
+                  <span>Volume</span>
+                  <input id="volume" type="range" min="0" max="100" step="1" value="100" aria-label="Playback volume" />
+                  <output id="volumeValue" for="volume">100%</output>
+                </label>
               </div>
             </div>
             <input id="scrubber" class="scrubber" type="range" min="0" max="1000" value="0" disabled aria-label="Playback position" />

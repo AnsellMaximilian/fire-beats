@@ -27,6 +27,6 @@ npm start
 - **Raw onsets** — every spectral-flux attack found before the current grid discards them.
 - **Manual markers** — press `M` during playback to mark a lyric or sound, rewind, and select Manual markers as the bubble source.
 
-Click the timeline to seek and use its zoom and position controls for close inspection. In the bubble preview, `Q`, `P`, `A`, and `L` trigger the four lanes; Space toggles playback. JSON export preserves the analyzer settings, event arrays, and manual markers.
+Click the timeline to seek and use its zoom, position, and volume controls for close inspection. In the bubble preview, `Q`, `P`, `A`, and `L` trigger the four lanes; Space toggles playback. JSON export preserves the analyzer settings, playback volume, event arrays, and manual markers.
 
 The renderer has no Node.js access. File selection, reading, analysis, and export go through a context-isolated preload API.
