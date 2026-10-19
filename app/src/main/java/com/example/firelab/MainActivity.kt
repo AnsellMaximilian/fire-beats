@@ -1,14 +1,22 @@
 package com.example.firelab
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.util.Base64
 import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,14 +39,18 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -53,6 +65,7 @@ import org.webrtc.SurfaceViewRenderer
 import kotlinx.coroutines.isActive
 import kotlin.math.ceil
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private lateinit var receiver: ReceiverController
@@ -131,7 +144,19 @@ private fun PoseScreen(state: ReceiverUiState) {
     var bottomCornerHands by remember { mutableStateOf<CalibrationHands?>(null) }
     var calibrationProgress by remember { mutableFloatStateOf(0f) }
     var readyProgress by remember { mutableFloatStateOf(0f) }
+    var hitEffects by remember { mutableStateOf(emptyList<HitEffect>()) }
+    var scorePopup by remember { mutableStateOf<ScorePopup?>(null) }
+    val avatarBitmap = remember(state.avatarDataUrl) {
+        decodeAvatarBitmap(state.avatarDataUrl)?.asImageBitmap()
+    }
     val targetLabelPaint = remember {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textAlign = android.graphics.Paint.Align.CENTER
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+    }
+    val scorePopupPaint = remember {
         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
             color = android.graphics.Color.WHITE
             textAlign = android.graphics.Paint.Align.CENTER
@@ -160,6 +185,8 @@ private fun PoseScreen(state: ReceiverUiState) {
         audioReady = false
         playbackStarted = false
         audioError = null
+        hitEffects = emptyList()
+        scorePopup = null
         selectedTrack?.let { track ->
             beatAudioPlayer.load(
                 url = track.audioUrl,
@@ -181,6 +208,13 @@ private fun PoseScreen(state: ReceiverUiState) {
             val elapsedSeconds =
                 ((frameTime - lastFrameTime) / 1_000_000_000f).coerceAtMost(0.05f)
             lastFrameTime = frameTime
+            hitEffects = hitEffects
+                .map { it.copy(ageSeconds = it.ageSeconds + elapsedSeconds) }
+                .filter { it.ageSeconds < HIT_EFFECT_SECONDS }
+            scorePopup = scorePopup?.let { popup ->
+                popup.copy(ageSeconds = popup.ageSeconds + elapsedSeconds)
+                    .takeIf { it.ageSeconds < SCORE_POPUP_SECONDS }
+            }
 
             val incomingPose = currentFrame
             if (incomingPose != null && incomingPose.timestamp != lastIncomingTimestamp) {
@@ -330,11 +364,11 @@ private fun PoseScreen(state: ReceiverUiState) {
                 songTime <= note.beatTimeSeconds + NOTE_MISS_WINDOW_SECONDS
             }
 
-            var hits = 0
+            val hitNotes = mutableListOf<BeatNote>()
             val survivors = if (pose != null && canvasSize != IntSize.Zero) {
                 hittableNotes.filterNot { note ->
                     noteHitsFist(note, songTime, pose, canvasSize, calibration).also { hit ->
-                        if (hit) hits += 1
+                        if (hit) hitNotes += note
                     }
                 }
             } else {
@@ -343,8 +377,13 @@ private fun PoseScreen(state: ReceiverUiState) {
 
             activeNotes = survivors
             if (missed > 0) misses += missed
+            val hits = hitNotes.size
             if (hits > 0) {
                 score += hits
+                hitEffects = hitEffects + hitNotes.map { note ->
+                    HitEffect(laneIndex = note.laneIndex)
+                }
+                scorePopup = ScorePopup(points = hits)
                 repeat(hits.coerceAtMost(3)) { popSoundPlayer.play() }
                 Log.i("FireTV", "Beat target hit; score=$score misses=$misses")
             }
@@ -424,6 +463,26 @@ private fun PoseScreen(state: ReceiverUiState) {
                     center.x,
                     labelBaseline,
                     targetLabelPaint
+                )
+            }
+
+            hitEffects.forEach { effect ->
+                val progress = (effect.ageSeconds / HIT_EFFECT_SECONDS).coerceIn(0f, 1f)
+                val lane = beatLanes[effect.laneIndex]
+                val center = lane.position(size.width, size.height)
+                val baseRadius = HIT_TARGET_RADIUS * min(size.width, size.height)
+                val radius = baseRadius * (1f + progress * 0.9f)
+                val alpha = (1f - progress) * 0.75f
+                drawCircle(
+                    color = lane.hand.color.copy(alpha = alpha * 0.35f),
+                    radius = radius,
+                    center = center
+                )
+                drawCircle(
+                    color = Color.White.copy(alpha = alpha),
+                    radius = radius,
+                    center = center,
+                    style = Stroke(width = 9f * (1f - progress).coerceAtLeast(0.25f))
                 )
             }
 
@@ -562,8 +621,32 @@ private fun PoseScreen(state: ReceiverUiState) {
                     )
                     val radius = ((leftEar - rightEar).getDistance() * 0.75f)
                         .coerceAtLeast(22f)
+                    avatarBitmap?.let { image ->
+                        val avatarBounds = Rect(
+                            left = center.x - radius,
+                            top = center.y - radius,
+                            right = center.x + radius,
+                            bottom = center.y + radius
+                        )
+                        val avatarClip = Path().apply { addOval(avatarBounds) }
+                        clipPath(avatarClip) {
+                            drawImage(
+                                image = image,
+                                srcOffset = IntOffset.Zero,
+                                srcSize = IntSize(image.width, image.height),
+                                dstOffset = IntOffset(
+                                    avatarBounds.left.roundToInt(),
+                                    avatarBounds.top.roundToInt()
+                                ),
+                                dstSize = IntSize(
+                                    avatarBounds.width.roundToInt(),
+                                    avatarBounds.height.roundToInt()
+                                )
+                            )
+                        }
+                    }
                     drawCircle(
-                        color = Color(0xFFF97316),
+                        color = if (avatarBitmap == null) Color(0xFFF97316) else Color.White,
                         radius = radius,
                         center = center,
                         style = Stroke(width = 10f)
@@ -591,6 +674,19 @@ private fun PoseScreen(state: ReceiverUiState) {
                         )
                     }
                 }
+            }
+
+            scorePopup?.let { popup ->
+                val progress = (popup.ageSeconds / SCORE_POPUP_SECONDS).coerceIn(0f, 1f)
+                val easedScale = 1f + (1f - progress) * 0.35f
+                scorePopupPaint.textSize = 92f * easedScale
+                scorePopupPaint.alpha = ((1f - progress) * 255).roundToInt().coerceIn(0, 255)
+                drawContext.canvas.nativeCanvas.drawText(
+                    "+${popup.points}",
+                    size.width / 2f,
+                    size.height / 2f - progress * 90f,
+                    scorePopupPaint
+                )
             }
         }
 
@@ -700,6 +796,16 @@ private data class BeatNote(
     val laneIndex: Int
 )
 
+private data class HitEffect(
+    val laneIndex: Int,
+    val ageSeconds: Float = 0f
+)
+
+private data class ScorePopup(
+    val points: Int,
+    val ageSeconds: Float = 0f
+)
+
 private data class BeatLane(
     val x: Float,
     val y: Float,
@@ -803,6 +909,8 @@ private const val NOTE_MISS_WINDOW_SECONDS = 0.32f
 private const val NOTE_RADIUS = 0.045f
 private const val HIT_TARGET_RADIUS = 0.105f
 private const val FIST_RADIUS = 0.03f
+private const val HIT_EFFECT_SECONDS = 0.48f
+private const val SCORE_POPUP_SECONDS = 0.72f
 
 private val targetHands = TargetHand.values().toList()
 private val beatLanes = listOf(
@@ -995,6 +1103,15 @@ private fun PairingScreen(
     val qrCode = remember(state.phoneUrl) {
         state.phoneUrl?.let(::createQrCode)
     }
+    val statusPulse by rememberInfiniteTransition(label = "pairing-status").animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 850),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pairing-status-pulse"
+    )
 
     Box(
         modifier = Modifier
@@ -1028,11 +1145,26 @@ private fun PairingScreen(
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                Text(
-                    text = state.status,
-                    color = if (state.error == null) Color(0xFFFDBA74) else Color(0xFFFCA5A5),
-                    fontSize = 22.sp
-                )
+                val statusColor =
+                    if (state.error == null) Color(0xFFFDBA74) else Color(0xFFFCA5A5)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size((12f + statusPulse * 6f).dp)
+                            .background(
+                                statusColor.copy(alpha = 0.35f + statusPulse * 0.65f),
+                                CircleShape
+                            )
+                    )
+                    Text(
+                        text = state.status,
+                        color = statusColor,
+                        fontSize = 22.sp
+                    )
+                }
                 Text(
                     text = "Scan QR to start pose play",
                     color = Color.White,
@@ -1074,6 +1206,18 @@ private fun PairingScreen(
             }
         }
     }
+}
+
+private fun decodeAvatarBitmap(dataUrl: String?): Bitmap? {
+    if (dataUrl.isNullOrBlank()) return null
+    return runCatching {
+        val encoded = dataUrl.substringAfter(',', missingDelimiterValue = "")
+        if (encoded.isBlank()) return null
+        val bytes = Base64.decode(encoded, Base64.DEFAULT)
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    }.onFailure { error ->
+        Log.w("FireTV", "Could not decode player avatar", error)
+    }.getOrNull()
 }
 
 private fun createQrCode(contents: String): Bitmap {

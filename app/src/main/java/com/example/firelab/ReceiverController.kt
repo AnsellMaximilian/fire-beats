@@ -45,6 +45,7 @@ data class ReceiverUiState(
     val poseFps: Float = 0f,
     val poseInferenceMs: Float = 0f,
     val poseDelegate: String = "--",
+    val avatarDataUrl: String? = null,
     val selectedTrack: BeatTrack? = null,
     val remoteTrackReceived: Boolean = false,
     val firstFrameRendered: Boolean = false
@@ -387,6 +388,11 @@ class ReceiverController(
             }
             "signal" -> handleSignal(message.getJSONObject("data"))
             "track-selected" -> handleTrackSelected(message.getJSONObject("track"))
+            "avatar-selected" -> {
+                val dataUrl = message.optString("dataUrl").takeIf { it.isNotBlank() }
+                Log.i(TAG, "Player avatar received; bytes=${dataUrl?.length ?: 0}")
+                updateState { copy(avatarDataUrl = dataUrl, error = null) }
+            }
             "error" -> {
                 Log.e(TAG, "Signaling server error: ${message.optString("message")}")
                 updateState {

@@ -6,48 +6,157 @@
     <title>Track pose for FireLab</title>
     <link rel="stylesheet" href="/shared.css" />
     <style>
-      body { padding: max(1.25rem, env(safe-area-inset-top)) 1.25rem max(1.25rem, env(safe-area-inset-bottom)); display: grid; place-items: center; }
-      main { width: min(100%, 640px); }
-      h1 { font-size: 2rem; margin-bottom: 0.5rem; }
-      .preview { display: block; width: 100%; aspect-ratio: 3 / 4; border-radius: 24px; object-fit: cover; background: #111827; margin: 1.25rem 0; transform: scaleX(-1); }
-      .model-status { min-height: 1.5rem; margin-bottom: 0; }
-      button { width: 100%; font-size: 1.05rem; }
-      .warning { padding: 1rem; border-radius: 14px; background: #7c2d12; color: #ffedd5; }
-      .music-panel { margin: 1.25rem 0; padding: 1rem; border: 1px solid #334155; border-radius: 18px; background: #111827; }
-      .music-panel h2 { margin: 0 0 0.75rem; }
-      .music-panel label { display: block; margin: 0.8rem 0 0.35rem; color: #cbd5e1; }
-      .music-panel input, .music-panel select { width: 100%; font: inherit; color: #f8fafc; background: #0f172a; border: 1px solid #475569; border-radius: 12px; padding: 0.75rem; }
-      .music-panel button { margin-top: 0.75rem; }
-      .music-panel progress { width: 100%; height: 0.75rem; margin-top: 0.75rem; accent-color: #38bdf8; }
-      .compact-status { min-height: 1.4rem; margin: 0.45rem 0 0; font-size: 0.9rem; }
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body { min-height: 100dvh; margin: 0; padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem max(0.75rem, env(safe-area-inset-bottom)); display: grid; place-items: center; overflow: hidden; background: radial-gradient(circle at 50% -10%, #172554 0, #080b12 46%); }
+      button, input, select { font: inherit; }
+      button { width: 100%; min-height: 3.25rem; border-radius: 16px; font-weight: 700; }
+      h1 { margin: 0; font-size: clamp(1.7rem, 8vw, 2.25rem); }
+      h2 { margin: 0 0 0.45rem; font-size: 1.55rem; }
+      .app-shell { width: min(100%, 560px); height: min(94dvh, 820px); display: grid; grid-template-rows: auto auto 1fr; border: 1px solid #26334a; border-radius: 28px; overflow: hidden; background: rgba(10, 15, 27, 0.96); box-shadow: 0 28px 80px rgba(0, 0, 0, 0.45); }
+      .app-header { padding: 1rem 1.1rem 0.8rem; border-bottom: 1px solid #1f2937; }
+      .brand-row, .status-row, .summary-row, .button-row { display: flex; align-items: center; gap: 0.75rem; }
+      .brand-row { justify-content: space-between; }
+      .eyebrow { margin: 0 0 0.2rem; color: #60a5fa; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; }
+      .room-pill { padding: 0.45rem 0.7rem; border: 1px solid #334155; border-radius: 999px; color: #cbd5e1; font-size: 0.78rem; white-space: nowrap; }
+      .status-row { margin-top: 0.8rem; color: #cbd5e1; font-size: 0.9rem; }
+      .status-dot { width: 0.7rem; height: 0.7rem; flex: 0 0 auto; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5); animation: status-pulse 1.4s infinite; }
+      .status-dot.online { background: #34d399; box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5); }
+      @keyframes status-pulse { 70% { box-shadow: 0 0 0 9px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+      .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.45rem; padding: 0.75rem 1.1rem; }
+      .step { height: 0.28rem; border-radius: 999px; background: #253147; transition: background 180ms ease, transform 180ms ease; }
+      .step.active { background: #3b82f6; transform: scaleY(1.35); }
+      .page { min-height: 0; padding: 1rem 1.1rem 1.2rem; overflow-y: auto; animation: page-in 180ms ease-out; }
+      .page[hidden] { display: none; }
+      @keyframes page-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
+      .muted { color: #94a3b8; }
+      .lead { margin: 0 0 1.1rem; color: #aebbd0; line-height: 1.45; }
+      .choice-grid { display: grid; gap: 0.8rem; }
+      .choice { min-height: 5rem; padding: 1rem; text-align: left; border: 1px solid #334155; background: #111827; color: #f8fafc; }
+      .choice strong, .choice span { display: block; }
+      .choice span { margin-top: 0.3rem; color: #94a3b8; font-size: 0.88rem; font-weight: 400; }
+      .choice:hover, .choice:focus-visible { border-color: #60a5fa; background: #172554; }
+      .secondary { background: #172033; color: #dbeafe; }
+      .ghost { background: transparent; color: #94a3b8; border: 1px solid #334155; }
+      .button-row { margin-top: 0.9rem; }
+      .button-row > * { flex: 1; }
+      label { display: block; margin: 0.8rem 0 0.35rem; color: #cbd5e1; font-weight: 650; }
+      input[type="file"], select { width: 100%; color: #f8fafc; background: #0f172a; border: 1px solid #475569; border-radius: 14px; padding: 0.8rem; }
+      progress { width: 100%; height: 0.7rem; margin-top: 1rem; accent-color: #38bdf8; }
+      .compact-status { min-height: 1.4rem; margin: 0.55rem 0; font-size: 0.9rem; }
+      .warning { margin: 0 1.1rem 0.7rem; padding: 0.75rem; border-radius: 14px; background: #7c2d12; color: #ffedd5; }
+      .avatar-stage { display: grid; place-items: center; min-height: 14rem; margin: 0.8rem 0; border: 1px dashed #334155; border-radius: 22px; background: #0f172a; }
+      .avatar-preview { width: 11rem; height: 11rem; border-radius: 50%; object-fit: cover; border: 7px solid #f8fafc; box-shadow: 0 0 0 6px #3b82f6; }
+      .avatar-placeholder { width: 9rem; height: 9rem; display: grid; place-items: center; border-radius: 50%; background: #1e293b; color: #64748b; font-size: 3rem; }
+      [data-page="avatar"] { padding-top: 0.55rem; }
+      [data-page="avatar"] .lead { margin-bottom: 0.5rem; }
+      [data-page="avatar"] .avatar-stage { min-height: 9.5rem; margin: 0.45rem 0 0.6rem; }
+      [data-page="avatar"] .avatar-preview { width: 7.5rem; height: 7.5rem; border-width: 5px; box-shadow: 0 0 0 4px #3b82f6; }
+      [data-page="avatar"] .avatar-placeholder { width: 7rem; height: 7rem; font-size: 2.4rem; }
+      [data-page="avatar"] .choice-grid { gap: 0.5rem; }
+      [data-page="avatar"] .choice { min-height: 3.8rem; padding: 0.65rem 0.85rem; }
+      [data-page="avatar"] #useAvatar { margin-top: 0.6rem; }
+      [data-page="avatar"] .button-row { margin-top: 0.5rem; }
+      .preview { display: block; width: min(100%, 310px); max-height: 43dvh; aspect-ratio: 3 / 4; margin: 0.8rem auto; border-radius: 22px; object-fit: cover; background: #111827; transform: scaleX(-1); }
+      .model-status { min-height: 1.35rem; margin: 0.55rem 0; font-size: 0.86rem; text-align: center; }
+      .summary-card { padding: 0.85rem; border: 1px solid #334155; border-radius: 18px; background: #111827; }
+      .summary-row { justify-content: space-between; }
+      .summary-avatar { width: 3rem; height: 3rem; border-radius: 50%; object-fit: cover; border: 3px solid #60a5fa; }
+      .summary-label { margin: 0; color: #64748b; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; }
+      .summary-value { margin: 0.18rem 0 0; color: #f8fafc; font-weight: 700; }
+      [hidden] { display: none !important; }
     </style>
   </head>
   <body>
-    <main>
-      <p class="status" id="status">Connecting to TV…</p>
-      <h1>Send your pose</h1>
-      <p class="muted">Keep your head, shoulders, elbows, and hands visible. Only body landmarks are sent to the TV; camera video stays on this phone.</p>
-      <p id="secureWarning" class="warning" hidden>Camera access needs HTTPS. Start the server with trusted TLS or set PUBLIC_URL to an HTTPS tunnel, then scan the new QR code.</p>
-      <section class="music-panel">
-        <h2>Beat track</h2>
-        <label for="trackFile">Upload an MP3</label>
+    <main class="app-shell">
+      <header class="app-header">
+        <div class="brand-row">
+          <div>
+            <p class="eyebrow">FireLab</p>
+            <h1>Ready your player</h1>
+          </div>
+          <span class="room-pill">Room <strong id="roomLabel">--------</strong></span>
+        </div>
+        <div class="status-row"><span id="statusDot" class="status-dot"></span><span id="status">Connecting to TV…</span></div>
+      </header>
+      <div class="steps" aria-label="Setup progress">
+        <span class="step active" data-step="1"></span>
+        <span class="step" data-step="2"></span>
+        <span class="step" data-step="3"></span>
+      </div>
+      <p id="secureWarning" class="warning" hidden>Camera access needs HTTPS. Start the server with trusted TLS or use an HTTPS tunnel.</p>
+
+      <section class="page" data-page="track-choice">
+        <h2>Choose your music</h2>
+        <p class="lead">Start with a new MP3 or pick a track already analyzed by FireLab.</p>
+        <div class="choice-grid">
+          <button id="showUpload" class="choice" type="button"><strong>Upload new track</strong><span>Choose an MP3 and analyze its beats.</span></button>
+          <button id="showLibrary" class="choice" type="button"><strong>Choose existing track</strong><span>Use a song already stored on this server.</span></button>
+        </div>
+      </section>
+
+      <section class="page" data-page="track-upload" hidden>
+        <h2>Upload a track</h2>
+        <p class="lead">MP3 files up to 50 MB work best for this prototype.</p>
+        <label for="trackFile">MP3 file</label>
         <input id="trackFile" type="file" />
         <button id="uploadTrack" type="button">Upload and analyze</button>
         <progress id="trackProgress" max="100" value="0"></progress>
-        <p id="trackStatus" class="muted compact-status">Choose an MP3, or select one already uploaded.</p>
-        <label for="trackSelect">Available tracks</label>
-        <select id="trackSelect" disabled>
-          <option>Loading tracks…</option>
-        </select>
-        <button id="chooseTrack" type="button" disabled>Use selected track</button>
+        <p id="trackStatus" class="muted compact-status">Choose an MP3 to continue.</p>
+        <button id="useUploadedTrack" type="button" disabled>Continue with this track</button>
+        <button class="ghost" data-back="track-choice" type="button">Back</button>
       </section>
-      <p id="modelStatus" class="muted model-status">The lightweight pose model loads after the camera starts.</p>
-      <video id="preview" class="preview" autoplay muted playsinline></video>
-      <button id="start" type="button">Start pose tracking</button>
+
+      <section class="page" data-page="track-library" hidden>
+        <h2>Track library</h2>
+        <p class="lead">Analyzed songs are available to every room on this development server.</p>
+        <label for="trackSelect">Available tracks</label>
+        <select id="trackSelect" disabled><option>Loading tracks…</option></select>
+        <button id="chooseTrack" type="button" disabled>Use selected track</button>
+        <button class="ghost" data-back="track-choice" type="button">Back</button>
+      </section>
+
+      <section class="page" data-page="avatar" hidden>
+        <h2>Add your player photo</h2>
+        <p class="lead">It becomes the round head on your TV character. The resized image is kept in memory for this room.</p>
+        <div class="avatar-stage">
+          <div id="avatarPlaceholder" class="avatar-placeholder">☺</div>
+          <img id="avatarPreview" class="avatar-preview" alt="Player photo preview" hidden />
+        </div>
+        <input id="cameraPhoto" type="file" accept="image/*" capture="user" hidden />
+        <input id="libraryPhoto" type="file" accept="image/*" hidden />
+        <div class="choice-grid">
+          <button id="takePhoto" class="choice" type="button"><strong>Take a new photo</strong><span>Open the phone camera.</span></button>
+          <button id="choosePhoto" class="choice" type="button"><strong>Choose from phone</strong><span>Pick an existing image.</span></button>
+        </div>
+        <button id="useAvatar" type="button" disabled>Use this photo</button>
+        <div class="button-row">
+          <button class="ghost" data-back="track-choice" type="button">Music</button>
+          <button id="skipAvatar" class="ghost" type="button">Skip for now</button>
+        </div>
+      </section>
+
+      <section class="page" data-page="lobby" hidden>
+        <div class="summary-card">
+          <div class="summary-row">
+            <div><p class="summary-label">Track</p><p id="selectedTrackLabel" class="summary-value">Not selected</p></div>
+            <img id="lobbyAvatar" class="summary-avatar" alt="Player avatar" hidden />
+          </div>
+        </div>
+        <video id="preview" class="preview" autoplay muted playsinline></video>
+        <p id="modelStatus" class="muted model-status">Camera and pose detection start when you are ready.</p>
+        <button id="start" type="button">Start pose tracking</button>
+        <div class="button-row">
+          <button id="changeMusic" class="ghost" type="button">Change music</button>
+          <button id="changePhoto" class="ghost" type="button">Change photo</button>
+        </div>
+      </section>
     </main>
     <script type="module">
       const room = new URLSearchParams(location.search).get("room");
       const status = document.querySelector("#status");
+      const statusDot = document.querySelector("#statusDot");
+      const roomLabel = document.querySelector("#roomLabel");
       const modelStatus = document.querySelector("#modelStatus");
       const button = document.querySelector("#start");
       const preview = document.querySelector("#preview");
@@ -58,8 +167,19 @@
       const trackStatus = document.querySelector("#trackStatus");
       const trackSelect = document.querySelector("#trackSelect");
       const chooseTrack = document.querySelector("#chooseTrack");
+      const useUploadedTrack = document.querySelector("#useUploadedTrack");
+      const selectedTrackLabel = document.querySelector("#selectedTrackLabel");
+      const cameraPhoto = document.querySelector("#cameraPhoto");
+      const libraryPhoto = document.querySelector("#libraryPhoto");
+      const avatarPreview = document.querySelector("#avatarPreview");
+      const avatarPlaceholder = document.querySelector("#avatarPlaceholder");
+      const useAvatar = document.querySelector("#useAvatar");
+      const lobbyAvatar = document.querySelector("#lobbyAvatar");
+      const pages = [...document.querySelectorAll("[data-page]")];
+      const stepIndicators = [...document.querySelectorAll("[data-step]")];
       warning.hidden = window.isSecureContext;
       button.disabled = !room;
+      roomLabel.textContent = room || "invalid";
 
       let socket;
       let peer;
@@ -78,6 +198,9 @@
       let socketReconnectAttempt = 0;
       let negotiationInProgress = false;
       let poseReconnectTimer;
+      let uploadedTrackId;
+      let selectedTrack;
+      let selectedAvatarDataUrl;
 
       const poseIntervalMs = 50;
       const maxUploadBytes = 50 * 1024 * 1024;
@@ -86,7 +209,36 @@
       const visionWasmUrl = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
       const poseModelUrl = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
 
-      function setStatus(text) { status.textContent = text; }
+      function setStatus(text) {
+        status.textContent = text;
+        statusDot.classList.toggle("online", socketConnected);
+      }
+
+      function showPage(name) {
+        pages.forEach((page) => { page.hidden = page.dataset.page !== name; });
+        const step = name.startsWith("track-") ? 1 : name === "avatar" ? 2 : 3;
+        stepIndicators.forEach((indicator) => {
+          indicator.classList.toggle("active", Number(indicator.dataset.step) <= step);
+        });
+      }
+
+      function updateLobby() {
+        selectedTrackLabel.textContent = selectedTrack?.name || "Choose a track first";
+        lobbyAvatar.src = selectedAvatarDataUrl || "";
+        lobbyAvatar.hidden = !selectedAvatarDataUrl;
+      }
+
+      function selectTrackAndContinue(trackId) {
+        const track = availableTracks.find((item) => item.id === trackId && item.status === "ready");
+        if (!track || socket?.readyState !== WebSocket.OPEN) {
+          setStatus("Waiting for the TV connection…");
+          return;
+        }
+        selectedTrack = track;
+        socket.send(JSON.stringify({ type: "select-track", trackId }));
+        updateLobby();
+        showPage("avatar");
+      }
 
       function renderTracks(preferredId) {
         const previousId = preferredId || trackSelect.value;
@@ -110,6 +262,8 @@
         trackSelect.value = preferredOption?.value || firstReadyOption?.value || "";
         trackSelect.disabled = !firstReadyOption;
         chooseTrack.disabled = !socketConnected || !trackSelect.value;
+        const uploadedTrack = availableTracks.find((track) => track.id === uploadedTrackId);
+        useUploadedTrack.disabled = !socketConnected || uploadedTrack?.status !== "ready";
       }
 
       async function loadTracks(preferredId) {
@@ -128,6 +282,10 @@
         if (existingIndex >= 0) availableTracks[existingIndex] = track;
         else availableTracks.unshift(track);
         renderTracks(track.status === "ready" ? track.id : undefined);
+        if (track.id === uploadedTrackId && track.status === "ready") {
+          trackProgress.value = 100;
+          trackStatus.textContent = `Ready — ${track.bpm} BPM, ${track.beatCount} beats`;
+        }
       }
 
       async function uploadSelectedTrack() {
@@ -193,6 +351,7 @@
             return;
           }
           const track = result;
+          uploadedTrackId = track.id;
           updateTrack(track);
           trackStatus.textContent = "Upload complete — analyzing beats…";
         };
@@ -213,6 +372,54 @@
         }
       }
 
+      async function prepareAvatar(file) {
+        if (!file) return;
+        useAvatar.disabled = true;
+        setStatus("Preparing player photo…");
+        try {
+          const image = await createImageBitmap(file, { imageOrientation: "from-image" });
+          const canvas = document.createElement("canvas");
+          canvas.width = 256;
+          canvas.height = 256;
+          const context = canvas.getContext("2d", { alpha: false });
+          const cropSize = Math.min(image.width, image.height);
+          const sourceX = (image.width - cropSize) / 2;
+          const sourceY = (image.height - cropSize) / 2;
+          context.drawImage(
+            image,
+            sourceX,
+            sourceY,
+            cropSize,
+            cropSize,
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+          );
+          image.close();
+          selectedAvatarDataUrl = canvas.toDataURL("image/jpeg", 0.82);
+          avatarPreview.src = selectedAvatarDataUrl;
+          avatarPreview.hidden = false;
+          avatarPlaceholder.hidden = true;
+          useAvatar.disabled = false;
+          setStatus("Photo ready — confirm it below");
+        } catch (error) {
+          console.error("Avatar image failed", error);
+          setStatus("Could not read that photo. Try a JPEG or PNG image.");
+        }
+      }
+
+      function confirmAvatar() {
+        if (!selectedAvatarDataUrl || socket?.readyState !== WebSocket.OPEN) {
+          setStatus("Waiting for the TV connection…");
+          return;
+        }
+        socket.send(JSON.stringify({ type: "set-avatar", dataUrl: selectedAvatarDataUrl }));
+        updateLobby();
+        showPage("lobby");
+        setStatus("Lobby ready");
+      }
+
       function connect() {
         clearTimeout(socketReconnectTimer);
         socketReconnectTimer = undefined;
@@ -225,6 +432,12 @@
             socketConnected = true;
             socketReconnectAttempt = 0;
             currentSocket.send(JSON.stringify({ type: "join", room, role: "phone" }));
+            if (selectedTrack?.id) {
+              currentSocket.send(JSON.stringify({ type: "select-track", trackId: selectedTrack.id }));
+            }
+            if (selectedAvatarDataUrl) {
+              currentSocket.send(JSON.stringify({ type: "set-avatar", dataUrl: selectedAvatarDataUrl }));
+            }
             setStatus(cameraStream ? "Signaling reconnected — waiting for TV…" : "Ready to start");
             renderTracks();
             resolve();
@@ -255,8 +468,19 @@
               trackProgress.value = message.track.progress;
               trackStatus.textContent = message.message;
             } else if (message.type === "track-selected") {
+              selectedTrack = message.track;
               trackSelect.value = message.track.id;
               trackStatus.textContent = `Selected for TV: ${message.track.name}`;
+              updateLobby();
+            } else if (message.type === "avatar-selected") {
+              selectedAvatarDataUrl = message.dataUrl;
+              avatarPreview.src = selectedAvatarDataUrl;
+              avatarPreview.hidden = false;
+              avatarPlaceholder.hidden = true;
+              useAvatar.disabled = false;
+              updateLobby();
+            } else if (message.type === "error") {
+              setStatus(message.message || "The server rejected that action");
             }
           };
         });
@@ -476,20 +700,37 @@
       }
 
       button.addEventListener("click", startTracking);
+      document.querySelector("#showUpload").addEventListener("click", () => showPage("track-upload"));
+      document.querySelector("#showLibrary").addEventListener("click", () => showPage("track-library"));
+      document.querySelectorAll("[data-back]").forEach((backButton) => {
+        backButton.addEventListener("click", () => showPage(backButton.dataset.back));
+      });
       trackFile.addEventListener("change", () => {
         const file = trackFile.files?.[0];
+        uploadedTrackId = undefined;
+        useUploadedTrack.disabled = true;
         trackStatus.textContent = file
           ? `Selected ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`
-          : "Choose an MP3, or select one already uploaded.";
+          : "Choose an MP3 to continue.";
       });
       uploadTrack.addEventListener("click", uploadSelectedTrack);
+      useUploadedTrack.addEventListener("click", () => selectTrackAndContinue(uploadedTrackId));
       trackSelect.addEventListener("change", () => {
         chooseTrack.disabled = !socketConnected || !trackSelect.value;
       });
-      chooseTrack.addEventListener("click", () => {
-        if (!trackSelect.value || socket?.readyState !== WebSocket.OPEN) return;
-        socket.send(JSON.stringify({ type: "select-track", trackId: trackSelect.value }));
+      chooseTrack.addEventListener("click", () => selectTrackAndContinue(trackSelect.value));
+      document.querySelector("#takePhoto").addEventListener("click", () => cameraPhoto.click());
+      document.querySelector("#choosePhoto").addEventListener("click", () => libraryPhoto.click());
+      cameraPhoto.addEventListener("change", () => void prepareAvatar(cameraPhoto.files?.[0]));
+      libraryPhoto.addEventListener("change", () => void prepareAvatar(libraryPhoto.files?.[0]));
+      useAvatar.addEventListener("click", confirmAvatar);
+      document.querySelector("#skipAvatar").addEventListener("click", () => {
+        updateLobby();
+        showPage("lobby");
+        setStatus("Lobby ready");
       });
+      document.querySelector("#changeMusic").addEventListener("click", () => showPage("track-choice"));
+      document.querySelector("#changePhoto").addEventListener("click", () => showPage("avatar"));
       connect();
       void loadTracks();
     </script>

@@ -330,6 +330,7 @@ async function requestHandler(request, response) {
 
 const clients = new Map();
 const selectedTracksByRoom = new Map();
+const avatarsByRoom = new Map();
 
 function attachSignaling(server) {
   const sockets = new WebSocketServer({ server, path: "/signal" });
@@ -368,6 +369,10 @@ function attachSignaling(server) {
             track: trackSummary(selectedTrack, true),
           }));
         }
+        const avatarDataUrl = avatarsByRoom.get(room);
+        if (avatarDataUrl) {
+          socket.send(JSON.stringify({ type: "avatar-selected", dataUrl: avatarDataUrl }));
+        }
         broadcast(socket, { type: "peer-joined", role });
         return;
       }
@@ -389,6 +394,22 @@ function attachSignaling(server) {
           type: "track-selected",
           track: trackSummary(track, true),
         });
+        return;
+      }
+
+      if (message.type === "set-avatar" && clients.has(socket)) {
+        const client = clients.get(socket);
+        const dataUrl = typeof message.dataUrl === "string" ? message.dataUrl : "";
+        const validImage = /^data:image\/(?:jpeg|png|webp);base64,[a-z0-9+/=]+$/i.test(dataUrl);
+        if (!validImage || dataUrl.length > 250_000) {
+          socket.send(JSON.stringify({
+            type: "error",
+            message: "Avatar must be a JPEG, PNG, or WebP image under 250 KB",
+          }));
+          return;
+        }
+        avatarsByRoom.set(client.room, dataUrl);
+        broadcastToRoom(client.room, { type: "avatar-selected", dataUrl });
       }
     });
 
