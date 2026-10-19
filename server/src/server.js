@@ -5,10 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
-import decodeAudio from "@audio/decode";
-import { detect as detectBeats } from "@audio/beat";
 import QRCode from "qrcode";
 import { WebSocketServer, WebSocket } from "ws";
+import { analyzeEncodedAudio } from "./audio-analysis.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDirectory = path.resolve(__dirname, "../public");
@@ -112,21 +111,17 @@ async function analyzeTrack(track, room) {
     const encodedAudio = await fs.promises.readFile(
       path.join(tracksDirectory, track.id, "audio.mp3"),
     );
-    const decoded = await decodeAudio(encodedAudio);
-    const samples = decoded.channelData[0];
-    if (!samples?.length) throw new Error("The MP3 did not contain a decodable audio channel");
-
     track.progress = 80;
     publishTrackProgress(room, track, "Detecting beats…");
-    const analysis = detectBeats(samples, {
-      fs: decoded.sampleRate,
+    const decodedAnalysis = await analyzeEncodedAudio(encodedAudio, {
       minBpm: 60,
       maxBpm: 200,
     });
+    const analysis = decodedAnalysis.current;
 
     track.bpm = Math.round(analysis.bpm * 10) / 10;
     track.beats = Array.from(analysis.beats, (beat) => Math.round(beat * 1000) / 1000);
-    track.duration = Math.round((samples.length / decoded.sampleRate) * 100) / 100;
+    track.duration = Math.round(decodedAnalysis.duration * 100) / 100;
     track.status = "ready";
     track.progress = 100;
     track.error = null;

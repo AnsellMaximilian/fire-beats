@@ -19,3 +19,4 @@ server/data/
 server/.env
 server/*.log
 server/*.pem
+desktop-playground/node_modules/

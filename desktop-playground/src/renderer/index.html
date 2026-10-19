@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob: data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FireLab Audio Playground</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">FireLab Lab Tool</p>
+          <h1>Audio playground</h1>
+        </div>
+        <div class="top-actions">
+          <span id="fileLabel" class="file-label">No track loaded</span>
+          <button id="exportButton" class="button secondary" disabled>Export JSON</button>
+          <button id="openButton" class="button primary">Open audio</button>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <aside class="sidebar">
+          <section class="side-section">
+            <div class="section-heading">
+              <div><p class="section-kicker">Analyzer</p><h2>Inputs</h2></div>
+              <button id="analyzeButton" class="text-button" disabled>Reanalyze</button>
+            </div>
+            <label for="channelMode">Audio channel</label>
+            <select id="channelMode">
+              <option value="first">First channel — current server</option>
+              <option value="mix">Stereo downmix</option>
+            </select>
+            <div class="split-fields">
+              <div><label for="minBpm">Min BPM</label><input id="minBpm" type="number" min="30" max="240" value="60" /></div>
+              <div><label for="maxBpm">Max BPM</label><input id="maxBpm" type="number" min="40" max="300" value="200" /></div>
+            </div>
+            <label for="delta">Onset threshold <output id="deltaValue">1.40</output></label>
+            <input id="delta" type="range" min="0.5" max="3" step="0.05" value="1.4" />
+          </section>
+
+          <section class="side-section">
+            <p class="section-kicker">Analysis</p>
+            <h2>Result</h2>
+            <dl class="metrics">
+              <div><dt>Current grid</dt><dd id="currentBpm">—</dd></div>
+              <div><dt>Grid events</dt><dd id="currentCount">—</dd></div>
+              <div><dt>Adaptive beats</dt><dd id="adaptiveCount">—</dd></div>
+              <div><dt>Raw onsets</dt><dd id="onsetCount">—</dd></div>
+              <div><dt>Audio</dt><dd id="audioDetails">—</dd></div>
+            </dl>
+          </section>
+
+          <section class="side-section">
+            <p class="section-kicker">Timeline</p>
+            <h2>Overlays</h2>
+            <label class="check-row"><input id="showCurrent" type="checkbox" checked /><span class="swatch cyan"></span>Current uniform grid</label>
+            <label class="check-row"><input id="showAdaptive" type="checkbox" checked /><span class="swatch pink"></span>Adaptive beats</label>
+            <label class="check-row"><input id="showOnsets" type="checkbox" checked /><span class="swatch amber"></span>Acoustic onsets</label>
+            <label class="check-row"><input id="showManual" type="checkbox" checked /><span class="swatch violet"></span>Manual markers</label>
+          </section>
+
+          <section class="side-section marker-section">
+            <p class="section-kicker">Prototype</p>
+            <h2>Manual semantic marks</h2>
+            <p>Press <kbd>M</kbd> when you hear a lyric or sound you want to test, then replay using Manual markers.</p>
+            <button id="addMarkerButton" class="button secondary" disabled>Add at playhead</button>
+            <button id="clearMarkersButton" class="text-button" disabled>Clear markers</button>
+            <p id="markerCount" class="small-status">0 markers</p>
+          </section>
+        </aside>
+
+        <main class="main-content">
+          <div id="statusBanner" class="status-banner">
+            <span class="status-dot"></span>
+            <span id="statusText">Open an audio file to inspect the current FireLab beat grid.</span>
+          </div>
+
+          <section class="panel timeline-panel">
+            <div class="panel-heading">
+              <div><p class="section-kicker">Inspect</p><h2>Waveform and events</h2></div>
+              <div class="transport">
+                <button id="playButton" class="round-button" disabled aria-label="Play or pause">▶</button>
+                <span id="timeLabel" class="time-label">0:00.000 / 0:00.000</span>
+              </div>
+            </div>
+            <input id="scrubber" class="scrubber" type="range" min="0" max="1000" value="0" disabled aria-label="Playback position" />
+            <canvas id="timelineCanvas" class="timeline-canvas"></canvas>
+            <div class="view-controls">
+              <label for="zoom">Zoom <output id="zoomValue">1×</output></label>
+              <input id="zoom" type="range" min="1" max="32" step="1" value="1" disabled />
+              <label for="pan">Position</label>
+              <input id="pan" type="range" min="0" max="1000" value="0" disabled />
+              <label class="check-row follow"><input id="followPlayhead" type="checkbox" checked /> Follow</label>
+            </div>
+          </section>
+
+          <section class="panel game-panel">
+            <div class="panel-heading">
+              <div><p class="section-kicker">Preview</p><h2>Keyboard bubble run</h2></div>
+              <div class="game-controls">
+                <label for="chartSource">Events</label>
+                <select id="chartSource" disabled>
+                  <option value="current">Current grid</option>
+                  <option value="adaptive">Adaptive beats</option>
+                  <option value="onsets">Raw onsets</option>
+                  <option value="manual">Manual markers</option>
+                </select>
+                <button id="resetGameButton" class="text-button" disabled>Reset score</button>
+              </div>
+            </div>
+            <div class="game-layout">
+              <canvas id="gameCanvas" class="game-canvas"></canvas>
+              <div class="score-card">
+                <div><span>Hits</span><strong id="hitCount">0</strong></div>
+                <div><span>Misses</span><strong id="missCount">0</strong></div>
+                <div><span>Last offset</span><strong id="lastOffset">—</strong></div>
+                <div><span>Mean |offset|</span><strong id="meanOffset">—</strong></div>
+                <p><kbd>Q</kbd> top-left</p><p><kbd>P</kbd> top-right</p>
+                <p><kbd>A</kbd> bottom-left</p><p><kbd>L</kbd> bottom-right</p>
+                <p class="space-hint"><kbd>Space</kbd> play / pause</p>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+    <audio id="audio" preload="metadata"></audio>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

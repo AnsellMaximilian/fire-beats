@@ -66,6 +66,18 @@ Replace `192.168.1.20` with the address printed by the Node server. The Fire TV 
 4. Follow the TV prompts to calibrate the upper and lower reach corners, then use the overhead ready circle.
 5. Upload or select an MP3 on the phone. Notes travel from the center toward the four calibrated targets.
 
+## Desktop audio playground
+
+To inspect beat detection and bubble timing without pairing the phone and TV, use the Electron tool in `desktop-playground/`. It visualizes the exact current server grid beside adaptive beats and raw onsets, plays a keyboard-controlled four-lane preview, supports manual lyric/sound markers, and exports the analysis as JSON.
+
+```powershell
+cd desktop-playground
+npm install
+npm start
+```
+
+Install the server dependencies first because the playground deliberately imports the same audio-analysis module used by the server. See `desktop-playground/README.md` for controls and setup details.
+
 For focused native receiver logs:
 
 ```powershell
