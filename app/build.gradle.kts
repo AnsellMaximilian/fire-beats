@@ -4,7 +4,7 @@ plugins {
 }
 
 val fireLabServerUrl = providers.gradleProperty("FIRELAB_SERVER_URL")
-    .orElse("http://10.0.2.2:3050")
+    .orElse("https://fire-beats.onrender.com")
 
 android {
     namespace = "com.example.firelab"

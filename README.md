@@ -47,6 +47,12 @@ npm start
 
 The server loads the root `.env.local`, listens on every network interface, and exposes a shallow health check at `http://localhost:3050/health`.
 
+Android builds target `https://fire-beats.onrender.com` by default. Override that for an emulator connected to the local server with:
+
+```powershell
+.\gradlew.bat :app:assembleDebug -PFIRELAB_SERVER_URL=http://10.0.2.2:3050
+```
+
 Phone browsers require HTTPS for camera access. For local device testing, set `PUBLIC_URL` to an HTTPS tunnel or run the optional local TLS listener:
 
 ```powershell
@@ -67,10 +73,10 @@ For a quick demo, create a regular **Web Service** manually; a Blueprint is opti
 3. Add `NODE_VERSION=24` plus these values from the target Neon's environment: `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `NEON_AUTH_BASE_URL`, `NEON_AUTH_JWKS_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, and `AWS_REGION`. Do not set `PORT`; Render supplies it. `PUBLIC_URL` is also optional because the server reads Render's automatic `RENDER_EXTERNAL_URL`.
 4. Deploy. Render applies migrations and starts the WebSocket/HTTP service.
 5. Add the resulting `https://<service-name>.onrender.com` origin as a trusted Neon Auth domain. Before a real production launch, configure your own Google OAuth Client ID and secret in Neon Auth; use Neon’s displayed Google callback URL.
-6. Build the APK with the deployed origin compiled in:
+6. Build the APK. The deployed origin is now the build default:
 
 ```powershell
-.\gradlew.bat :app:assembleDebug -PFIRELAB_SERVER_URL=https://fire-beats.onrender.com
+.\gradlew.bat :app:assembleDebug
 ```
 
 For the first hosted test, it is reasonable to point Render at the Neon `development` branch. Once verified, apply `neon.ts` and `server/migrations/` to `production`, change only Render's Neon environment variables, and rebuild the APK only if the Render origin changes.
