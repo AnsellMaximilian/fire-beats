@@ -1,44 +1,62 @@
+import "./environment.js";
+
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
+import { Transform } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { randomBytes } from "node:crypto";
-import QRCode from "qrcode";
-import { WebSocketServer, WebSocket } from "ws";
-import { analyzeEncodedAudio } from "./audio-analysis.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const publicDirectory = path.resolve(__dirname, "../public");
-const tracksDirectory = path.resolve(__dirname, "../data/tracks");
+import QRCode from "qrcode";
+import { WebSocket, WebSocketServer } from "ws";
+
+import { analyzeEncodedAudio } from "./audio-analysis.js";
+import {
+  UnauthorizedError,
+  optionalUserFromRequest,
+  publicAuthConfiguration,
+  verifyAccessToken,
+} from "./auth.js";
+import {
+  closeDatabase,
+  completeTrackAnalysis,
+  createUploadedTrack,
+  findTrack,
+  findVisibleTrack,
+  listVisibleTracks,
+  markInterruptedUploads,
+  setTrackProgress,
+  tracksNeedingAnalysis,
+} from "./database.js";
+import {
+  deleteObject,
+  downloadObject,
+  publicObjectUrl,
+  signedObjectUrl,
+  uploadObject,
+  userTracksBucket,
+} from "./storage.js";
+
+const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
+const publicDirectory = path.resolve(sourceDirectory, "../public");
 const httpPort = Number(process.env.PORT || 3050);
 const httpsPort = Number(process.env.HTTPS_PORT || 3443);
 const maxUploadBytes = 50 * 1024 * 1024;
+const roomPattern = /^[a-f0-9]{32}$/;
+const trackPattern = /^[a-f0-9]{16}$/;
+const clients = new Map();
+const selectedTracksByRoom = new Map();
+const avatarsByRoom = new Map();
+const socketServers = new Set();
 
-fs.mkdirSync(tracksDirectory, { recursive: true });
-
-const tracks = new Map();
-for (const entry of fs.readdirSync(tracksDirectory, { withFileTypes: true })) {
-  if (!entry.isDirectory()) continue;
-  try {
-    const metadata = JSON.parse(
-      fs.readFileSync(path.join(tracksDirectory, entry.name, "track.json"), "utf8"),
-    );
-    tracks.set(metadata.id, metadata);
-  } catch (error) {
-    console.warn(`Skipping unreadable track metadata for ${entry.name}`, error.message);
-  }
-}
-
-const readPage = (name) =>
-  fs.readFileSync(path.join(publicDirectory, name), "utf8");
+const readPage = (name) => fs.readFileSync(path.join(publicDirectory, name), "utf8");
 
 function localAddress() {
   for (const interfaces of Object.values(os.networkInterfaces())) {
     for (const address of interfaces || []) {
-      if (address.family === "IPv4" && !address.internal)
-        return address.address;
+      if (address.family === "IPv4" && !address.internal) return address.address;
     }
   }
   return "localhost";
@@ -52,192 +70,190 @@ function originForPhone(request) {
 }
 
 function createSession(request) {
-  const room = randomBytes(4).toString("hex");
+  const room = randomBytes(16).toString("hex");
   const phoneUrl = `${originForPhone(request)}/phone?room=${encodeURIComponent(room)}`;
   return { room, phoneUrl };
 }
 
-function send(response, status, type, body) {
+function send(response, status, type, body, headers = {}) {
+  if (response.headersSent) return;
   response.writeHead(status, {
     "content-type": `${type}; charset=utf-8`,
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
+    ...headers,
   });
   response.end(body);
 }
 
-function trackSummary(track, includeBeats = false) {
+function sendJson(response, status, value) {
+  send(response, status, "application/json", JSON.stringify(value));
+}
+
+function trackSummary(track, includeBeats = false, audioUrl = undefined) {
   const summary = {
     id: track.id,
     name: track.name,
-    size: track.size,
+    size: track.sizeBytes,
     status: track.status,
     progress: track.progress,
-    bpm: track.bpm ?? null,
-    duration: track.duration ?? null,
+    bpm: track.bpm,
+    duration: track.duration,
     beatCount: track.beats?.length || 0,
-    error: track.error || null,
+    error: track.error,
     createdAt: track.createdAt,
+    source: track.source,
+    visibility: track.visibility,
   };
   if (includeBeats) summary.beats = track.beats || [];
+  if (audioUrl) summary.audioUrl = audioUrl;
   return summary;
 }
 
-async function persistTrack(track) {
-  const directory = path.join(tracksDirectory, track.id);
-  await fs.promises.mkdir(directory, { recursive: true });
-  await fs.promises.writeFile(
-    path.join(directory, "track.json"),
-    JSON.stringify(track, null, 2),
-  );
+async function trackWithPlayback(track) {
+  const audioUrl = track.visibility === "public"
+    ? publicObjectUrl(track.bucket, track.objectKey)
+    : await signedObjectUrl(track.bucket, track.objectKey);
+  return trackSummary(track, true, audioUrl);
 }
 
 function publishTrackProgress(room, track, message) {
   if (!room) return;
-  broadcastToRoom(room, {
-    type: "track-progress",
-    message,
-    track: trackSummary(track),
-  });
+  broadcastToRoom(room, { type: "track-progress", message, track: trackSummary(track) });
 }
 
-async function analyzeTrack(track, room) {
+async function analyzeTrack(id, room = null) {
+  const original = await findTrack(id);
+  if (!original) return;
   try {
-    track.status = "analyzing";
-    track.progress = 60;
-    await persistTrack(track);
-    publishTrackProgress(room, track, "Decoding MP3…");
-
-    const encodedAudio = await fs.promises.readFile(
-      path.join(tracksDirectory, track.id, "audio.mp3"),
-    );
-    track.progress = 80;
+    let track = await setTrackProgress(id, "analyzing", 60);
+    publishTrackProgress(room, track, "Decoding audio…");
+    const encodedAudio = await downloadObject(track.bucket, track.objectKey);
+    track = await setTrackProgress(id, "analyzing", 80);
     publishTrackProgress(room, track, "Detecting beats…");
-    const decodedAnalysis = await analyzeEncodedAudio(encodedAudio, {
-      minBpm: 60,
-      maxBpm: 200,
-    });
-    const analysis = decodedAnalysis.current;
 
-    track.bpm = Math.round(analysis.bpm * 10) / 10;
-    track.beats = Array.from(analysis.beats, (beat) => Math.round(beat * 1000) / 1000);
-    track.duration = Math.round(decodedAnalysis.duration * 100) / 100;
-    track.status = "ready";
-    track.progress = 100;
-    track.error = null;
-    await persistTrack(track);
+    const decoded = await analyzeEncodedAudio(encodedAudio, { minBpm: 60, maxBpm: 200 });
+    const analysis = {
+      bpm: Math.round(decoded.current.bpm * 10) / 10,
+      beats: Array.from(decoded.current.beats, (beat) => Math.round(beat * 1000) / 1000),
+      duration: Math.round(decoded.duration * 100) / 100,
+    };
+    track = await completeTrackAnalysis(id, analysis);
     publishTrackProgress(room, track, `Ready — ${track.bpm} BPM, ${track.beats.length} beats`);
   } catch (error) {
-    console.error(`Track analysis failed for ${track.id}`, error);
-    track.status = "error";
-    track.error = error.message || "Audio analysis failed";
-    track.progress = 100;
-    await persistTrack(track);
+    console.error(`Track analysis failed for ${id}`, error);
+    const track = await setTrackProgress(
+      id,
+      "error",
+      100,
+      error?.message || "Audio analysis failed",
+    );
     publishTrackProgress(room, track, track.error);
   }
 }
 
 async function receiveTrackUpload(request, response, url) {
-  const room = String(url.searchParams.get("room") || "").toLowerCase();
-  const name = String(url.searchParams.get("name") || "Uploaded track").trim().slice(0, 160);
+  const authenticated = await optionalUserFromRequest(request);
+  if (!authenticated) throw new UnauthorizedError();
+
+  const roomValue = String(url.searchParams.get("room") || "").toLowerCase();
+  const room = roomPattern.test(roomValue) ? roomValue : null;
+  const name = String(url.searchParams.get("name") || "Uploaded track").trim().slice(0, 160)
+    || "Uploaded track";
   const contentLength = Number(request.headers["content-length"] || 0);
-  console.log(
-    `[FireTV] Track upload request name=${JSON.stringify(name)} length=${contentLength || "unknown"}`,
-  );
+  const mimeType = String(request.headers["content-type"] || "audio/mpeg").split(";")[0];
+  if (!Number.isSafeInteger(contentLength) || contentLength <= 0) {
+    sendJson(response, 411, { error: "A Content-Length header is required" });
+    return;
+  }
   if (contentLength > maxUploadBytes) {
-    console.warn(`[FireTV] Track upload rejected: ${contentLength} bytes exceeds 50 MB`);
-    send(response, 413, "application/json", JSON.stringify({ error: "MP3 must be 50 MB or smaller" }));
+    sendJson(response, 413, { error: "Audio must be 50 MB or smaller" });
+    return;
+  }
+  if (!mimeType.startsWith("audio/") && mimeType !== "application/octet-stream") {
+    sendJson(response, 415, { error: "Upload must be an audio file" });
     return;
   }
 
   const id = randomBytes(8).toString("hex");
-  const directory = path.join(tracksDirectory, id);
-  const audioPath = path.join(directory, "audio.mp3");
-  await fs.promises.mkdir(directory, { recursive: true });
-  const track = {
+  const ownerPath = createHash("sha256").update(authenticated.userId).digest("hex").slice(0, 32);
+  const objectKey = `users/${ownerPath}/${id}/audio`;
+  let track = await createUploadedTrack({
     id,
-    name: name || "Uploaded track",
-    size: 0,
-    status: "uploading",
-    progress: 0,
-    bpm: null,
-    duration: null,
-    beats: [],
-    error: null,
-    createdAt: new Date().toISOString(),
-  };
-  tracks.set(id, track);
+    ownerUserId: authenticated.userId,
+    name,
+    bucket: userTracksBucket,
+    objectKey,
+    mimeType,
+    sizeBytes: contentLength,
+  });
 
   let receivedBytes = 0;
   let lastPublishedProgress = -1;
-  const output = fs.createWriteStream(audioPath, { flags: "wx" });
-  request.on("data", (chunk) => {
-    receivedBytes += chunk.length;
-    if (receivedBytes > maxUploadBytes) request.destroy(new Error("Upload exceeds 50 MB"));
-    const progress = contentLength > 0
-      ? Math.min(55, Math.round((receivedBytes / contentLength) * 55))
-      : 25;
-    if (progress >= lastPublishedProgress + 2) {
-      lastPublishedProgress = progress;
-      track.progress = progress;
-      track.size = receivedBytes;
-      publishTrackProgress(room, track, `Uploading ${progress}%`);
-    }
+  const uploadStream = new Transform({
+    transform(chunk, _encoding, callback) {
+      receivedBytes += chunk.length;
+      const progress = Math.min(55, Math.round((receivedBytes / contentLength) * 55));
+      if (progress >= lastPublishedProgress + 2) {
+        lastPublishedProgress = progress;
+        publishTrackProgress(room, { ...track, progress }, `Uploading ${progress}%`);
+      }
+      callback(null, chunk);
+    },
   });
+  request.pipe(uploadStream);
 
   try {
-    await new Promise((resolve, reject) => {
-      request.on("error", reject);
-      request.on("aborted", () => reject(new Error("Upload was interrupted")));
-      output.on("error", reject);
-      output.on("finish", resolve);
-      request.pipe(output);
+    await uploadObject({
+      bucket: track.bucket,
+      key: track.objectKey,
+      body: uploadStream,
+      contentLength,
+      contentType: mimeType,
     });
-    track.size = receivedBytes;
-    track.progress = 55;
-    await persistTrack(track);
-    console.log(`[FireTV] Track upload received id=${track.id} bytes=${receivedBytes}`);
-    send(response, 202, "application/json", JSON.stringify(trackSummary(track)));
-    void analyzeTrack(track, room);
+    if (receivedBytes !== contentLength) throw new Error("Upload was interrupted");
+    track = await setTrackProgress(id, "analyzing", 60);
+    console.log(`[FireTV] Track upload received id=${id} bytes=${receivedBytes}`);
+    sendJson(response, 202, trackSummary(track));
+    void analyzeTrack(id, room);
   } catch (error) {
-    console.error(`[FireTV] Track upload failed name=${JSON.stringify(name)}`, error);
-    output.destroy();
-    tracks.delete(id);
-    await fs.promises.rm(directory, { recursive: true, force: true });
-    if (!response.headersSent) {
-      send(response, 400, "application/json", JSON.stringify({ error: error.message }));
-    }
+    console.error(`[FireTV] Track upload failed id=${id}`, error);
+    request.unpipe(uploadStream);
+    uploadStream.destroy();
+    await setTrackProgress(id, "error", 100, error?.message || "Upload failed");
+    await deleteObject(track.bucket, track.objectKey).catch(() => {});
+    if (!response.headersSent) sendJson(response, 400, { error: error?.message || "Upload failed" });
   }
 }
 
 async function requestHandler(request, response) {
-  const base = `${request.socket.encrypted ? "https" : "http"}://${request.headers.host || "localhost"}`;
+  const protocol = request.socket.encrypted ? "https" : "http";
+  const base = `${protocol}://${request.headers.host || "localhost"}`;
   const url = new URL(request.url || "/", base);
 
   if (url.pathname === "/health") {
-    send(response, 200, "application/json", JSON.stringify({ ok: true }));
+    sendJson(response, 200, { ok: true });
     return;
   }
-
   if (url.pathname === "/") {
     response.writeHead(302, { location: "/tv" });
     response.end();
     return;
   }
-
-  if (url.pathname === "/api/session") {
-    send(response, 200, "application/json", JSON.stringify(createSession(request)));
+  if (url.pathname === "/api/config" && request.method === "GET") {
+    sendJson(response, 200, publicAuthConfiguration());
     return;
   }
-
+  if (url.pathname === "/api/session" && request.method === "GET") {
+    sendJson(response, 200, createSession(request));
+    return;
+  }
   if (url.pathname === "/api/tracks" && request.method === "GET") {
-    const result = [...tracks.values()]
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-      .map((track) => trackSummary(track));
-    send(response, 200, "application/json", JSON.stringify(result));
+    const authenticated = await optionalUserFromRequest(request);
+    const tracks = await listVisibleTracks(authenticated?.userId);
+    sendJson(response, 200, tracks.map((track) => trackSummary(track)));
     return;
   }
-
   if (url.pathname === "/api/tracks" && request.method === "POST") {
     await receiveTrackUpload(request, response, url);
     return;
@@ -245,53 +261,25 @@ async function requestHandler(request, response) {
 
   const trackMatch = url.pathname.match(/^\/api\/tracks\/([a-f0-9]{16})$/);
   if (trackMatch && request.method === "GET") {
-    const track = tracks.get(trackMatch[1]);
-    if (!track) {
-      send(response, 404, "application/json", JSON.stringify({ error: "Track not found" }));
-      return;
-    }
-    send(response, 200, "application/json", JSON.stringify(trackSummary(track, true)));
+    const authenticated = await optionalUserFromRequest(request);
+    const track = await findVisibleTrack(trackMatch[1], authenticated?.userId);
+    if (!track) return sendJson(response, 404, { error: "Track not found" });
+    sendJson(response, 200, trackSummary(track, true));
     return;
   }
 
   const audioMatch = url.pathname.match(/^\/api\/tracks\/([a-f0-9]{16})\/audio$/);
   if (audioMatch && request.method === "GET") {
-    const track = tracks.get(audioMatch[1]);
-    const audioPath = path.join(tracksDirectory, audioMatch[1], "audio.mp3");
-    if (!track || !fs.existsSync(audioPath)) {
-      send(response, 404, "application/json", JSON.stringify({ error: "Track audio not found" }));
-      return;
+    const authenticated = await optionalUserFromRequest(request);
+    const track = await findVisibleTrack(audioMatch[1], authenticated?.userId);
+    if (!track || track.status !== "ready") {
+      return sendJson(response, 404, { error: "Track audio not found" });
     }
-
-    const fileSize = fs.statSync(audioPath).size;
-    const range = request.headers.range;
-    if (range) {
-      const match = range.match(/^bytes=(\d*)-(\d*)$/);
-      const start = match?.[1] ? Number(match[1]) : 0;
-      const end = match?.[2] ? Math.min(Number(match[2]), fileSize - 1) : fileSize - 1;
-      if (!match || start > end || start >= fileSize) {
-        response.writeHead(416, { "content-range": `bytes */${fileSize}` });
-        response.end();
-        return;
-      }
-      response.writeHead(206, {
-        "content-type": "audio/mpeg",
-        "content-length": end - start + 1,
-        "content-range": `bytes ${start}-${end}/${fileSize}`,
-        "accept-ranges": "bytes",
-        "cache-control": "no-store",
-      });
-      fs.createReadStream(audioPath, { start, end }).pipe(response);
-      return;
-    }
-
-    response.writeHead(200, {
-      "content-type": "audio/mpeg",
-      "content-length": fileSize,
-      "accept-ranges": "bytes",
-      "cache-control": "no-store",
-    });
-    fs.createReadStream(audioPath).pipe(response);
+    const location = track.visibility === "public"
+      ? publicObjectUrl(track.bucket, track.objectKey)
+      : await signedObjectUrl(track.bucket, track.objectKey);
+    response.writeHead(302, { location, "cache-control": "no-store" });
+    response.end();
     return;
   }
 
@@ -309,111 +297,124 @@ async function requestHandler(request, response) {
     send(response, 200, "text/html", page);
     return;
   }
-
-  if (url.pathname === "/phone") {
-    send(response, 200, "text/html", readPage("phone.html"));
-    return;
+  if (url.pathname === "/phone") return send(response, 200, "text/html", readPage("phone.html"));
+  if (url.pathname === "/shared.css") return send(response, 200, "text/css", readPage("shared.css"));
+  if (url.pathname === "/auth-client.js") {
+    return send(response, 200, "text/javascript", readPage("auth-client.js"));
   }
-
-  if (url.pathname === "/shared.css") {
-    send(response, 200, "text/css", readPage("shared.css"));
-    return;
-  }
-
   send(response, 404, "text/plain", "Not found");
 }
 
-const clients = new Map();
-const selectedTracksByRoom = new Map();
-const avatarsByRoom = new Map();
+async function handleSocketMessage(socket, raw) {
+  let message;
+  try {
+    message = JSON.parse(raw.toString());
+  } catch {
+    socket.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+    return;
+  }
+
+  if (message.type === "join") {
+    const room = String(message.room || "").toLowerCase();
+    const role = message.role;
+    if (!roomPattern.test(room) || !["phone", "tv"].includes(role)) {
+      socket.send(JSON.stringify({ type: "error", message: "Invalid room or role" }));
+      return;
+    }
+    let userId = null;
+    if (message.token) userId = (await verifyAccessToken(message.token)).userId;
+
+    for (const [otherSocket, client] of clients) {
+      if (otherSocket !== socket && client.room === room && client.role === role) {
+        clients.delete(otherSocket);
+        otherSocket.close(1000, "Replaced by a newer connection");
+      }
+    }
+    clients.set(socket, { room, role, userId });
+    const peers = [...clients.entries()]
+      .filter(([peer, client]) => peer !== socket && client.room === room)
+      .map(([, client]) => client.role);
+    socket.send(JSON.stringify({ type: "joined", room, peers }));
+
+    const selectedTrackId = selectedTracksByRoom.get(room);
+    const selectedTrack = selectedTrackId ? await findTrack(selectedTrackId) : null;
+    if (selectedTrack?.status === "ready") {
+      socket.send(JSON.stringify({ type: "track-selected", track: await trackWithPlayback(selectedTrack) }));
+    }
+    const avatarDataUrl = avatarsByRoom.get(room);
+    if (avatarDataUrl) socket.send(JSON.stringify({ type: "avatar-selected", dataUrl: avatarDataUrl }));
+    broadcast(socket, { type: "peer-joined", role });
+    return;
+  }
+
+  const client = clients.get(socket);
+  if (!client) return;
+  if (message.type === "signal") {
+    broadcast(socket, { type: "signal", data: message.data });
+    return;
+  }
+  if (message.type === "select-track") {
+    if (client.role !== "phone" || !trackPattern.test(String(message.trackId || ""))) return;
+    const track = await findVisibleTrack(String(message.trackId), client.userId);
+    if (!track || track.status !== "ready") {
+      socket.send(JSON.stringify({ type: "error", message: "Track is unavailable or not ready" }));
+      return;
+    }
+    selectedTracksByRoom.set(client.room, track.id);
+    broadcastToRoom(client.room, { type: "track-selected", track: await trackWithPlayback(track) });
+    return;
+  }
+  if (message.type === "set-avatar" && client.role === "phone") {
+    const dataUrl = typeof message.dataUrl === "string" ? message.dataUrl : "";
+    const validImage = /^data:image\/(?:jpeg|png|webp);base64,[a-z0-9+/=]+$/i.test(dataUrl);
+    if (!validImage || dataUrl.length > 250_000) {
+      socket.send(JSON.stringify({
+        type: "error",
+        message: "Avatar must be a JPEG, PNG, or WebP image under 250 KB",
+      }));
+      return;
+    }
+    avatarsByRoom.set(client.room, dataUrl);
+    broadcastToRoom(client.room, { type: "avatar-selected", dataUrl });
+  }
+}
 
 function attachSignaling(server) {
-  const sockets = new WebSocketServer({ server, path: "/signal" });
-
+  const sockets = new WebSocketServer({ server, path: "/signal", maxPayload: 300_000 });
+  socketServers.add(sockets);
   sockets.on("connection", (socket) => {
+    socket.isAlive = true;
+    socket.on("pong", () => { socket.isAlive = true; });
     socket.on("message", (raw) => {
-      let message;
-      try {
-        message = JSON.parse(raw.toString());
-      } catch {
-        socket.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
-        return;
-      }
-
-      if (message.type === "join") {
-        const room = String(message.room || "").toLowerCase();
-        const role = message.role === "phone" ? "phone" : "tv";
-        if (!/^[a-f0-9]{8}$/.test(room)) {
-          socket.send(
-            JSON.stringify({ type: "error", message: "Invalid room" }),
-          );
-          return;
-        }
-        clients.set(socket, { room, role });
-        const peers = [...clients.values()]
-          .filter(
-            (client) => client.room === room && client !== clients.get(socket),
-          )
-          .map((client) => client.role);
-        socket.send(JSON.stringify({ type: "joined", room, peers }));
-        const selectedTrackId = selectedTracksByRoom.get(room);
-        const selectedTrack = selectedTrackId && tracks.get(selectedTrackId);
-        if (selectedTrack?.status === "ready") {
-          socket.send(JSON.stringify({
-            type: "track-selected",
-            track: trackSummary(selectedTrack, true),
-          }));
-        }
-        const avatarDataUrl = avatarsByRoom.get(room);
-        if (avatarDataUrl) {
-          socket.send(JSON.stringify({ type: "avatar-selected", dataUrl: avatarDataUrl }));
-        }
-        broadcast(socket, { type: "peer-joined", role });
-        return;
-      }
-
-      if (message.type === "signal" && clients.has(socket)) {
-        broadcast(socket, { type: "signal", data: message.data });
-        return;
-      }
-
-      if (message.type === "select-track" && clients.has(socket)) {
-        const track = tracks.get(String(message.trackId || ""));
-        if (!track || track.status !== "ready") {
-          socket.send(JSON.stringify({ type: "error", message: "Track is not ready" }));
-          return;
-        }
-        const client = clients.get(socket);
-        selectedTracksByRoom.set(client.room, track.id);
-        broadcastToRoom(client.room, {
-          type: "track-selected",
-          track: trackSummary(track, true),
-        });
-        return;
-      }
-
-      if (message.type === "set-avatar" && clients.has(socket)) {
-        const client = clients.get(socket);
-        const dataUrl = typeof message.dataUrl === "string" ? message.dataUrl : "";
-        const validImage = /^data:image\/(?:jpeg|png|webp);base64,[a-z0-9+/=]+$/i.test(dataUrl);
-        if (!validImage || dataUrl.length > 250_000) {
-          socket.send(JSON.stringify({
-            type: "error",
-            message: "Avatar must be a JPEG, PNG, or WebP image under 250 KB",
-          }));
-          return;
-        }
-        avatarsByRoom.set(client.room, dataUrl);
-        broadcastToRoom(client.room, { type: "avatar-selected", dataUrl });
-      }
+      void handleSocketMessage(socket, raw).catch((error) => {
+        const message = error instanceof UnauthorizedError ? error.message : "Request failed";
+        if (!(error instanceof UnauthorizedError)) console.error("WebSocket message failed", error);
+        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "error", message }));
+      });
     });
-
     socket.on("close", () => {
       const client = clients.get(socket);
-      if (client) broadcast(socket, { type: "peer-left", role: client.role });
       clients.delete(socket);
+      if (!client) return;
+      broadcastToRoom(client.room, { type: "peer-left", role: client.role });
+      if (![...clients.values()].some((peer) => peer.room === client.room)) {
+        selectedTracksByRoom.delete(client.room);
+        avatarsByRoom.delete(client.room);
+      }
     });
   });
+  const heartbeat = setInterval(() => {
+    for (const socket of sockets.clients) {
+      if (!socket.isAlive) {
+        socket.terminate();
+        continue;
+      }
+      socket.isAlive = false;
+      socket.ping();
+    }
+  }, 30_000);
+  heartbeat.unref();
+  sockets.on("close", () => clearInterval(heartbeat));
 }
 
 function broadcast(sender, message) {
@@ -421,11 +422,7 @@ function broadcast(sender, message) {
   if (!senderClient) return;
   const payload = JSON.stringify(message);
   for (const [socket, client] of clients) {
-    if (
-      socket !== sender &&
-      client.room === senderClient.room &&
-      socket.readyState === WebSocket.OPEN
-    ) {
+    if (socket !== sender && client.room === senderClient.room && socket.readyState === WebSocket.OPEN) {
       socket.send(payload);
     }
   }
@@ -434,41 +431,53 @@ function broadcast(sender, message) {
 function broadcastToRoom(room, message) {
   const payload = JSON.stringify(message);
   for (const [socket, client] of clients) {
-    if (client.room === room && socket.readyState === WebSocket.OPEN) {
-      socket.send(payload);
-    }
+    if (client.room === room && socket.readyState === WebSocket.OPEN) socket.send(payload);
   }
+}
+
+function createRequestListener() {
+  return (request, response) => {
+    requestHandler(request, response).catch((error) => {
+      if (error instanceof UnauthorizedError) {
+        sendJson(response, 401, { error: error.message });
+        return;
+      }
+      console.error(error);
+      sendJson(response, 500, { error: "Internal server error" });
+    });
+  };
 }
 
 function startServer(server, port, label) {
   attachSignaling(server);
   server.listen(port, "0.0.0.0", () => {
-    console.log(
-      `${label} listening on ${label.toLowerCase()}://${localAddress()}:${port}`,
-    );
+    console.log(`${label} listening on ${label.toLowerCase()}://${localAddress()}:${port}`);
   });
 }
 
-const plainServer = http.createServer((request, response) => {
-  requestHandler(request, response).catch((error) => {
-    console.error(error);
-    send(response, 500, "text/plain", "Internal server error");
-  });
-});
+await markInterruptedUploads();
+const pending = await tracksNeedingAnalysis();
+for (const track of pending) void analyzeTrack(track.id);
+
+const servers = [];
+const plainServer = http.createServer(createRequestListener());
+servers.push(plainServer);
 startServer(plainServer, httpPort, "HTTP");
 
 if (process.env.TLS_KEY_PATH && process.env.TLS_CERT_PATH) {
   const secureServer = https.createServer(
-    {
-      key: fs.readFileSync(process.env.TLS_KEY_PATH),
-      cert: fs.readFileSync(process.env.TLS_CERT_PATH),
-    },
-    (request, response) => {
-      requestHandler(request, response).catch((error) => {
-        console.error(error);
-        send(response, 500, "text/plain", "Internal server error");
-      });
-    },
+    { key: fs.readFileSync(process.env.TLS_KEY_PATH), cert: fs.readFileSync(process.env.TLS_CERT_PATH) },
+    createRequestListener(),
   );
+  servers.push(secureServer);
   startServer(secureServer, httpsPort, "HTTPS");
 }
+
+async function shutdown() {
+  for (const sockets of socketServers) sockets.close();
+  await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+  await closeDatabase();
+}
+
+process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
+process.once("SIGINT", () => void shutdown().finally(() => process.exit(0)));

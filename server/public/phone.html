@@ -48,6 +48,9 @@
       progress { width: 100%; height: 0.7rem; margin-top: 1rem; accent-color: #38bdf8; }
       .compact-status { min-height: 1.4rem; margin: 0.55rem 0; font-size: 0.9rem; }
       .warning { margin: 0 1.1rem 0.7rem; padding: 0.75rem; border-radius: 14px; background: #7c2d12; color: #ffedd5; }
+      .auth-card { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0.65rem; margin-bottom: 0.9rem; padding: 0.75rem; border: 1px solid #334155; border-radius: 16px; background: #0f172a; }
+      .auth-card p { margin: 0; color: #cbd5e1; font-size: 0.86rem; }
+      .auth-card button { width: auto; min-height: 2.5rem; padding: 0.45rem 0.8rem; border-radius: 12px; }
       .avatar-stage { display: grid; place-items: center; min-height: 14rem; margin: 0.8rem 0; border: 1px dashed #334155; border-radius: 22px; background: #0f172a; }
       .avatar-preview { width: 11rem; height: 11rem; border-radius: 50%; object-fit: cover; border: 7px solid #f8fafc; box-shadow: 0 0 0 6px #3b82f6; }
       .avatar-placeholder { width: 9rem; height: 9rem; display: grid; place-items: center; border-radius: 50%; background: #1e293b; color: #64748b; font-size: 3rem; }
@@ -98,10 +101,15 @@
 
       <section class="page" data-page="track-choice">
         <h2>Choose your music</h2>
-        <p class="lead">Start with a new MP3 or pick a track already analyzed by FireLab.</p>
+        <p class="lead">Default music works as a guest. Sign in only when you want your own private uploads.</p>
+        <div class="auth-card">
+          <p id="authStatus">Checking sign-in…</p>
+          <button id="signIn" class="secondary" type="button" hidden>Sign in with Google</button>
+          <button id="signOut" class="ghost" type="button" hidden>Sign out</button>
+        </div>
         <div class="choice-grid">
-          <button id="showUpload" class="choice" type="button"><strong>Upload new track</strong><span>Choose an MP3 and analyze its beats.</span></button>
-          <button id="showLibrary" class="choice" type="button"><strong>Choose existing track</strong><span>Use a song already stored on this server.</span></button>
+          <button id="showUpload" class="choice" type="button"><strong>Upload new track</strong><span>Sign in, then choose an MP3 for your private library.</span></button>
+          <button id="showLibrary" class="choice" type="button"><strong>Choose a track</strong><span>Browse public defaults and your own uploads.</span></button>
         </div>
       </section>
 
@@ -121,7 +129,7 @@
 
       <section class="page" data-page="track-library" hidden>
         <h2>Track library</h2>
-        <p class="lead">Analyzed songs are available to every room on this development server.</p>
+        <p class="lead">Default tracks are public. Personal uploads are visible only to their owner.</p>
         <div class="library-controls">
           <label for="trackSelect">Available tracks</label>
           <select id="trackSelect" disabled><option>Loading tracks…</option></select>
@@ -132,7 +140,7 @@
 
       <section class="page" data-page="avatar" hidden>
         <h2>Add your player photo</h2>
-        <p class="lead">It becomes the round head on your TV character. The resized image is kept in memory for this room.</p>
+        <p class="lead">It becomes the round head on your TV character. The resized image stays in this phone's browser.</p>
         <div class="avatar-stage">
           <div id="avatarPlaceholder" class="avatar-placeholder">☺</div>
           <img id="avatarPreview" class="avatar-preview" alt="Player photo preview" hidden />
@@ -172,6 +180,7 @@
         </div>
       </section>
     </main>
+    <script src="/auth-client.js"></script>
     <script type="module">
       const room = new URLSearchParams(location.search).get("room");
       const status = document.querySelector("#status");
@@ -199,11 +208,15 @@
       const avatarPage = document.querySelector('[data-page="avatar"]');
       const useAvatar = document.querySelector("#useAvatar");
       const lobbyAvatar = document.querySelector("#lobbyAvatar");
+      const authStatus = document.querySelector("#authStatus");
+      const signIn = document.querySelector("#signIn");
+      const signOut = document.querySelector("#signOut");
+      const showUpload = document.querySelector("#showUpload");
       const pages = [...document.querySelectorAll("[data-page]")];
       const stepIndicators = [...document.querySelectorAll("[data-step]")];
       warning.hidden = window.isSecureContext;
       button.disabled = !room;
-      roomLabel.textContent = room || "invalid";
+      roomLabel.textContent = room ? `${room.slice(0, 8)}…` : "invalid";
 
       let socket;
       let peer;
@@ -230,10 +243,13 @@
       let avatarOffsetX = 0;
       let avatarOffsetY = 0;
       let avatarDrag;
+      let authUser;
+      let authAvailable = false;
 
       const targetPoseFps = 30;
       const poseIntervalMs = 1000 / targetPoseFps;
       const maxUploadBytes = 50 * 1024 * 1024;
+      const avatarStorageKey = "firelab.avatar.v1";
       const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
       const visionModuleUrl = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs";
       const visionWasmUrl = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
@@ -242,6 +258,51 @@
       function setStatus(text) {
         status.textContent = text;
         statusDot.classList.toggle("online", socketConnected);
+      }
+
+      function updateAuthUi() {
+        const identity = authUser?.name || authUser?.email;
+        authStatus.textContent = identity
+          ? `Signed in as ${identity}. Your uploads are private.`
+          : authAvailable
+            ? "Guest mode — default tracks are ready to use."
+            : "Guest mode — uploads are unavailable until authentication is configured.";
+        signIn.hidden = !authAvailable || Boolean(authUser);
+        signOut.hidden = !authUser;
+      }
+
+      async function initializeAuth() {
+        try {
+          const response = await fetch("/api/config", { cache: "no-store" });
+          const config = await response.json();
+          authAvailable = Boolean(config.authBaseUrl && window.fireBeatsAuth?.initialize(config.authBaseUrl));
+          if (authAvailable) authUser = (await window.fireBeatsAuth.getSession()).user;
+        } catch (error) {
+          console.warn("Authentication initialization failed", error);
+          authAvailable = false;
+          authUser = null;
+        }
+        updateAuthUi();
+      }
+
+      async function accessToken() {
+        if (!authUser || !authAvailable) return null;
+        return window.fireBeatsAuth.getToken();
+      }
+
+      function restoreSavedAvatar() {
+        try {
+          const saved = localStorage.getItem(avatarStorageKey);
+          if (!saved || saved.length > 250_000 || !/^data:image\/(?:jpeg|png|webp);base64,/i.test(saved)) return;
+          selectedAvatarDataUrl = saved;
+          avatarPreview.src = saved;
+          avatarPreview.hidden = false;
+          avatarPlaceholder.hidden = true;
+          useAvatar.disabled = !socketConnected;
+          updateLobby();
+        } catch (error) {
+          console.warn("Could not restore saved avatar", error);
+        }
       }
 
       function showPage(name) {
@@ -285,7 +346,8 @@
             const details = track.status === "ready"
               ? `${track.bpm} BPM · ${track.beatCount} beats`
               : `${track.status} ${track.progress}%`;
-            const option = new Option(`${track.name} — ${details}`, track.id);
+            const ownerLabel = track.source === "default" ? "Default" : "Your upload";
+            const option = new Option(`${ownerLabel}: ${track.name} — ${details}`, track.id);
             option.disabled = track.status !== "ready";
             trackSelect.add(option);
           }
@@ -303,7 +365,11 @@
 
       async function loadTracks(preferredId) {
         try {
-          const response = await fetch("/api/tracks", { cache: "no-store" });
+          const token = await accessToken();
+          const response = await fetch("/api/tracks", {
+            cache: "no-store",
+            headers: token ? { authorization: `Bearer ${token}` } : {},
+          });
           if (!response.ok) throw new Error(`Track list failed (${response.status})`);
           availableTracks = await response.json();
           renderTracks(preferredId);
@@ -324,6 +390,12 @@
       }
 
       async function uploadSelectedTrack() {
+        const token = await accessToken();
+        if (!token) {
+          trackStatus.textContent = "Sign in with Google before uploading a personal track.";
+          showPage("track-choice");
+          return;
+        }
         const file = trackFile.files?.[0];
         if (!file) {
           trackStatus.textContent = "Choose an MP3 file first.";
@@ -360,6 +432,7 @@
         const query = new URLSearchParams({ room, name: file.name });
         xhr.open("POST", `/api/tracks?${query}`);
         xhr.setRequestHeader("content-type", file.type || "audio/mpeg");
+        xhr.setRequestHeader("authorization", `Bearer ${token}`);
         // Harmless to the local server and prevents ngrok's free-tier interstitial
         // from replacing an API response with HTML.
         xhr.setRequestHeader("ngrok-skip-browser-warning", "true");
@@ -479,6 +552,11 @@
           return;
         }
         socket.send(JSON.stringify({ type: "set-avatar", dataUrl: selectedAvatarDataUrl }));
+        try {
+          localStorage.setItem(avatarStorageKey, selectedAvatarDataUrl);
+        } catch (error) {
+          console.warn("Could not save avatar locally", error);
+        }
         updateLobby();
         showPage("lobby");
         setStatus("Lobby ready");
@@ -491,17 +569,13 @@
           const protocol = location.protocol === "https:" ? "wss" : "ws";
           const currentSocket = new WebSocket(`${protocol}://${location.host}/signal`);
           socket = currentSocket;
-          currentSocket.onopen = () => {
+          currentSocket.onopen = async () => {
+            if (socket !== currentSocket) return;
+            const token = await accessToken().catch(() => null);
             if (socket !== currentSocket) return;
             socketConnected = true;
             socketReconnectAttempt = 0;
-            currentSocket.send(JSON.stringify({ type: "join", room, role: "phone" }));
-            if (selectedTrack?.id) {
-              currentSocket.send(JSON.stringify({ type: "select-track", trackId: selectedTrack.id }));
-            }
-            if (selectedAvatarDataUrl) {
-              currentSocket.send(JSON.stringify({ type: "set-avatar", dataUrl: selectedAvatarDataUrl }));
-            }
+            currentSocket.send(JSON.stringify({ type: "join", room, role: "phone", token }));
             useAvatar.disabled = !selectedAvatarDataUrl;
             setStatus(cameraStream ? "Signaling reconnected — waiting for TV…" : "Ready to start");
             renderTracks();
@@ -520,12 +594,19 @@
           currentSocket.onmessage = (event) => {
             if (socket !== currentSocket) return;
             const message = JSON.parse(event.data);
-            if (message.type === "signal") {
+            if (message.type === "joined") {
+              if (selectedTrack?.id) {
+                currentSocket.send(JSON.stringify({ type: "select-track", trackId: selectedTrack.id }));
+              }
+              if (selectedAvatarDataUrl) {
+                currentSocket.send(JSON.stringify({ type: "set-avatar", dataUrl: selectedAvatarDataUrl }));
+              }
+              if (cameraStream && message.peers?.includes("tv")) void negotiatePoseConnection();
+            } else if (message.type === "signal") {
               handleSignal(message.data).catch((error) => setStatus(error.message));
             } else if (
               cameraStream &&
-              ((message.type === "joined" && message.peers?.includes("tv")) ||
-                (message.type === "peer-joined" && message.role === "tv"))
+              message.type === "peer-joined" && message.role === "tv"
             ) {
               void negotiatePoseConnection();
             } else if (message.type === "track-progress") {
@@ -770,8 +851,30 @@
       }
 
       button.addEventListener("click", startTracking);
-      document.querySelector("#showUpload").addEventListener("click", () => showPage("track-upload"));
+      showUpload.addEventListener("click", () => {
+        if (!authUser) {
+          setStatus("Sign in with Google to upload a private track");
+          signIn.focus();
+          return;
+        }
+        showPage("track-upload");
+      });
       document.querySelector("#showLibrary").addEventListener("click", () => showPage("track-library"));
+      signIn.addEventListener("click", () => {
+        void window.fireBeatsAuth.signInWithGoogle(location.href).catch((error) => setStatus(error.message));
+      });
+      signOut.addEventListener("click", async () => {
+        try {
+          await window.fireBeatsAuth.signOut();
+          authUser = null;
+          selectedTrack = selectedTrack?.source === "default" ? selectedTrack : null;
+          updateAuthUi();
+          socket?.close(1000, "Signed out");
+          await loadTracks();
+        } catch (error) {
+          setStatus(error.message || "Could not sign out");
+        }
+      });
       document.querySelectorAll("[data-back]").forEach((backButton) => {
         backButton.addEventListener("click", () => showPage(backButton.dataset.back));
       });
@@ -831,8 +934,13 @@
       });
       document.querySelector("#changeMusic").addEventListener("click", () => showPage("track-choice"));
       document.querySelector("#changePhoto").addEventListener("click", () => showPage("avatar"));
-      connect();
-      void loadTracks();
+      async function boot() {
+        restoreSavedAvatar();
+        await initializeAuth();
+        connect();
+        await loadTracks();
+      }
+      void boot();
     </script>
   </body>
 </html>

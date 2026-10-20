@@ -1,0 +1,11 @@
+{
+  "scripts": {
+    "build": "npm --prefix server run build",
+    "test": "npm --prefix server test",
+    "migrate": "npm --prefix server run migrate"
+  },
+  "dependencies": {
+    "@neon/config": "^1.9.2",
+    "@neon/env": "^1.6.3"
+  }
+}

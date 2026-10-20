@@ -9,13 +9,26 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
-    "test": "node --test"
+    "dev": "npm run build && node --watch src/server.js",
+    "build": "node scripts/build-browser.js",
+    "migrate": "node scripts/migrate.js",
+    "seed:defaults": "node scripts/seed-default-tracks.js",
+    "verify:neon": "node scripts/verify-neon.js",
+    "test": "npm run build && node --test"
   },
   "dependencies": {
     "@audio/beat": "^3.1.0",
     "@audio/decode": "^4.2.0",
+    "@aws-sdk/client-s3": "^3.1153.0",
+    "@aws-sdk/s3-request-presigner": "^3.1153.0",
+    "@neondatabase/auth": "^0.6.0-beta",
+    "dotenv": "^18.0.8",
+    "jose": "^6.2.13",
+    "pg": "^8.23.1",
     "qrcode": "^1.5.4",
     "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

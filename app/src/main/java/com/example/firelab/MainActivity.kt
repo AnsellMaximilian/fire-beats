@@ -1313,7 +1313,7 @@ private fun PairingScreen(
                 )
                 state.room?.let { room ->
                     Text(
-                        text = "Room $room",
+                        text = "Room ${room.take(8)}…",
                         color = Color(0xFFFDBA74),
                         fontSize = 20.sp
                     )

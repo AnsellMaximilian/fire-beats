@@ -416,7 +416,9 @@ class ReceiverController(
             bpm = value.optDouble("bpm", 0.0).toFloat(),
             duration = value.optDouble("duration", 0.0).toFloat(),
             beats = beats,
-            audioUrl = "$serverUrl/api/tracks/${value.getString("id")}/audio"
+            audioUrl = value.optString("audioUrl").ifBlank {
+                "$serverUrl/api/tracks/${value.getString("id")}/audio"
+            }
         )
         Log.i(TAG, "Beat track selected; name=${track.name} bpm=${track.bpm} beats=${track.beats.size}")
         updateState { copy(selectedTrack = track, error = null) }

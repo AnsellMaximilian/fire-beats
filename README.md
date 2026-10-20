@@ -1,37 +1,53 @@
-# FireLab phone pose → Fire TV beat-game prototype
+# FireLab phone pose → Fire TV beat game
 
-This project pairs a phone browser with a native Fire TV app by QR code. The phone runs lightweight MediaPipe pose detection locally and sends only normalized body landmarks to the TV over a WebRTC data channel; camera video stays on the phone.
+FireLab pairs a phone browser with a native Fire TV app by QR code. The phone runs MediaPipe pose detection locally and sends normalized landmarks to the TV over WebRTC; camera video never leaves the phone.
 
-A small Node server serves the phone page, creates pairing sessions, relays WebRTC signaling, stores uploaded MP3 files, and performs prototype beat analysis. The Fire TV renders a native four-corner rhythm game with pose calibration, color-coded hand targets, scoring, and sound.
+The long-running Node service hosts the phone UI, creates pairing rooms, relays WebRTC signaling over WebSockets, and analyzes uploaded audio. Neon supplies Managed Auth, Postgres metadata, and S3-compatible object storage:
 
-## 1. Start the signaling server
+- Guests can pair, play public default tracks, and use an avatar.
+- Google sign-in is optional and is required only for uploading or listing personal tracks.
+- Uploaded audio is private and every API/WebSocket selection is owner-checked.
+- A private track reaches the paired TV through a short-lived signed object URL.
+- The cropped avatar is stored only in the phone browser's `localStorage` and is resent to the TV when the phone joins a room.
+- Pairing rooms are 128-bit random capabilities and live only in server memory.
+
+## Neon development setup
+
+This repository is configured for Neon project `purple-leaf-30592465`. The local `.neon` pointer and `.env.local` are ignored by Git. Keep local work on the `development` Neon branch:
+
+```powershell
+neon checkout development --no-env-pull
+neon deploy
+npm install
+cd server
+npm install
+npm run migrate
+npm run verify:neon
+```
+
+`neon deploy` provisions the services in `neon.ts` and refreshes the branch-specific secrets in the root `.env.local`. The migration command prefers the direct `DATABASE_URL_UNPOOLED`; the running app uses the pooled `DATABASE_URL`.
+
+To add public music, put audio you are allowed to distribute in `server/default-tracks/`, then run:
 
 ```powershell
 cd server
-npm install
+npm run seed:defaults
+```
+
+The source audio is ignored by Git. The seed command analyzes it, uploads it to the public `default-tracks` bucket, and upserts its Postgres row using a content-derived ID.
+
+## Run locally
+
+```powershell
+cd server
+npm run build
 $env:PORT = "3050"
-$env:PUBLIC_URL = "https://your-tunnel.example"
 npm start
 ```
 
-The server listens on every network interface. It defaults to port `3050`; `PORT` can override it. Check it with `http://localhost:3050/health`.
+The server loads the root `.env.local`, listens on every network interface, and exposes a shallow health check at `http://localhost:3050/health`.
 
-## 2. Give the phone an HTTPS URL
-
-Phone browsers only allow camera access from a secure context. The quickest development setup is an HTTPS tunnel pointed at port 3050. Set its public URL before starting the server so the TV's QR code uses it:
-
-```powershell
-$env:PUBLIC_URL = "https://your-tunnel.example"
-npm start
-```
-
-For example, with a reserved ngrok development domain:
-
-```powershell
-ngrok http 3050 --url https://your-domain.ngrok-free.dev
-```
-
-Alternatively, provide a certificate trusted by the phone. This keeps HTTP on port 3050 for the TV and also starts HTTPS on port 3443:
+Phone browsers require HTTPS for camera access. For local device testing, set `PUBLIC_URL` to an HTTPS tunnel or run the optional local TLS listener:
 
 ```powershell
 $env:TLS_KEY_PATH = "C:\path\to\trusted-key.pem"
@@ -40,35 +56,46 @@ $env:PUBLIC_URL = "https://192.168.1.20:3443"
 npm start
 ```
 
-The phone and development machine must be able to reach each other. A tunnel is usually simpler than installing a local CA on a phone.
+## Deploy the test backend on Render
 
-## 3. Point the Android app at the server
+`render.yaml` defines one Singapore web service, matching the Neon project region. Keep it at one instance because active rooms, avatars, and WebRTC signaling state are deliberately in memory.
 
-For an Android emulator, pass `10.0.2.2`, which points back to the development machine:
+1. Create a Render Blueprint from this repository.
+2. Copy these values from the target Neon's environment into the matching secret fields in Render: `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `NEON_AUTH_BASE_URL`, `NEON_AUTH_JWKS_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, and `AWS_REGION`.
+3. Render automatically exposes its assigned HTTPS origin as `PUBLIC_URL` through the Blueprint's self-reference to `RENDER_EXTERNAL_URL`.
+4. Deploy. Render runs `npm ci && npm run build`, applies migrations, then starts the WebSocket/HTTP service.
+5. Add the Render origin as a trusted Neon Auth domain. Before a real production launch, configure your own Google OAuth Client ID and secret in Neon Auth; use Neon’s displayed Google callback URL.
+6. Build the APK with the deployed origin compiled in:
 
 ```powershell
-.\gradlew.bat installDebug -PFIRELAB_SERVER_URL=http://10.0.2.2:3050
+.\gradlew.bat :app:assembleDebug -PFIRELAB_SERVER_URL=https://fire-beats.onrender.com
 ```
 
-For a physical Fire TV, use the development machine's LAN address:
+For the first hosted test, it is reasonable to point Render at the Neon `development` branch. Once verified, apply `neon.ts` and `server/migrations/` to `production`, change only Render's Neon environment variables, and rebuild the APK only if the Render origin changes.
 
-```powershell
-.\gradlew.bat installDebug -PFIRELAB_SERVER_URL=http://192.168.1.20:3050
-```
-
-Replace `192.168.1.20` with the address printed by the Node server. The Fire TV and development machine must be on the same network, and the firewall must allow the selected inbound TCP port. `FIRELAB_SERVER_URL` is compiled into the APK, so rebuild and reinstall after changing it.
-
-## 4. Pair
+## Pair and play
 
 1. Launch FireLab on the TV.
-2. Scan the QR code with the phone's normal camera app.
-3. Tap **Start pose tracking** and grant camera permission.
-4. Follow the TV prompts to calibrate the upper and lower reach corners, then use the overhead ready circle.
-5. Upload or select an MP3 on the phone. Notes travel from the center toward the four calibrated targets.
+2. Scan its QR code with the phone camera.
+3. Choose a public default track, or sign in with Google to upload/select a private track.
+4. Optionally take or choose a player photo. It remains in that phone browser.
+5. Start pose tracking, grant camera permission, and follow the TV calibration prompts.
+
+## Verification
+
+```powershell
+npm test
+cd server
+npm run verify:neon
+cd ..
+.\gradlew.bat :app:assembleDebug
+```
+
+`verify:neon` checks the database schema, Auth signing keys, a private object round trip and signed URL, and anonymous retrieval from the public bucket. It deletes its diagnostic objects afterward.
 
 ## Desktop audio playground
 
-To inspect beat detection and bubble timing without pairing the phone and TV, use the Electron tool in `desktop-playground/`. It visualizes the exact current server grid beside adaptive beats and raw onsets, plays a keyboard-controlled four-lane preview, supports manual lyric/sound markers, and exports the analysis as JSON.
+The Electron tool in `desktop-playground/` visualizes the same audio analysis used by the server:
 
 ```powershell
 cd desktop-playground
@@ -76,18 +103,11 @@ npm install
 npm start
 ```
 
-Install the server dependencies first because the playground deliberately imports the same audio-analysis module used by the server. See `desktop-playground/README.md` for controls and setup details.
+## Remaining production work
 
-For focused native receiver logs:
-
-```powershell
-adb logcat -v time FireTV:V AndroidRuntime:E "*:S"
-```
-
-## Prototype limitations
-
-- The Google public STUN server is enough for many local and ordinary NAT setups, but production use needs a TURN server for reliable connectivity.
-- Pairing rooms and selected tracks are held in memory; uploaded MP3 files and their analysis metadata are stored under `server/data/`.
-- Use this only on a trusted development network. Add authentication and tighter origin controls before exposing it as a real service.
-- The phone page currently loads MediaPipe and its pose model from public CDNs.
-- Beat detection, calibration thresholds, hit windows, and gameplay are prototype-quality and need broader device/user testing.
+- Configure owned Google OAuth credentials and the deployed trusted origin.
+- Add licensed/default audio content; the public bucket and seeder are ready but intentionally empty.
+- Add a TURN service for reliable WebRTC connectivity across difficult NATs.
+- Move ephemeral room state to a shared coordinator only if the service needs more than one instance.
+- Add retention/deletion controls and abuse limits before opening uploads beyond a small test group.
+- The phone page still loads MediaPipe and its pose model from public CDNs.

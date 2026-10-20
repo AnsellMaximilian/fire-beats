@@ -16,7 +16,14 @@
 local.properties
 server/node_modules/
 server/data/
+server/public/auth-client.js
+server/public/auth-client.js.map
+server/default-tracks/*
+!server/default-tracks/README.md
 server/.env
 server/*.log
 server/*.pem
 desktop-playground/node_modules/
+.neon
+node_modules/
+.env.local
