@@ -60,11 +60,13 @@ npm start
 
 `render.yaml` defines one Singapore web service, matching the Neon project region. Keep it at one instance because active rooms, avatars, and WebRTC signaling state are deliberately in memory.
 
-1. Create a Render Blueprint from this repository.
-2. Copy these values from the target Neon's environment into the matching secret fields in Render: `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `NEON_AUTH_BASE_URL`, `NEON_AUTH_JWKS_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, and `AWS_REGION`.
-3. Render automatically exposes its assigned HTTPS origin as `PUBLIC_URL` through the Blueprint's self-reference to `RENDER_EXTERNAL_URL`.
-4. Deploy. Render runs `npm ci && npm run build`, applies migrations, then starts the WebSocket/HTTP service.
-5. Add the Render origin as a trusted Neon Auth domain. Before a real production launch, configure your own Google OAuth Client ID and secret in Neon Auth; use Neon’s displayed Google callback URL.
+For a quick demo, create a regular **Web Service** manually; a Blueprint is optional:
+
+1. In Render choose **New > Web Service**, connect this repository, and select the Git branch containing these changes.
+2. Set **Region** to Singapore, **Root Directory** to `server`, **Build Command** to `npm ci && npm run build`, **Start Command** to `npm run migrate && npm start`, and **Instance Type** to Free. Under Advanced, set **Health Check Path** to `/health`.
+3. Add `NODE_VERSION=24` plus these values from the target Neon's environment: `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `NEON_AUTH_BASE_URL`, `NEON_AUTH_JWKS_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, and `AWS_REGION`. Do not set `PORT`; Render supplies it. `PUBLIC_URL` is also optional because the server reads Render's automatic `RENDER_EXTERNAL_URL`.
+4. Deploy. Render applies migrations and starts the WebSocket/HTTP service.
+5. Add the resulting `https://<service-name>.onrender.com` origin as a trusted Neon Auth domain. Before a real production launch, configure your own Google OAuth Client ID and secret in Neon Auth; use Neon’s displayed Google callback URL.
 6. Build the APK with the deployed origin compiled in:
 
 ```powershell
@@ -72,6 +74,8 @@ npm start
 ```
 
 For the first hosted test, it is reasonable to point Render at the Neon `development` branch. Once verified, apply `neon.ts` and `server/migrations/` to `production`, change only Render's Neon environment variables, and rebuild the APK only if the Render origin changes.
+
+The checked-in Blueprint is still available and explicitly uses Render's free plan, but it is not required for the manual flow above.
 
 ## Pair and play
 

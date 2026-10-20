@@ -63,7 +63,8 @@ function localAddress() {
 }
 
 function originForPhone(request) {
-  if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, "");
+  const hostedOrigin = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL;
+  if (hostedOrigin) return hostedOrigin.replace(/\/$/, "");
   const protocol = request.socket.encrypted ? "https" : "http";
   const port = request.socket.encrypted ? httpsPort : httpPort;
   return `${protocol}://${localAddress()}:${port}`;
