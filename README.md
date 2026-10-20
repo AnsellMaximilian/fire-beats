@@ -1,6 +1,8 @@
-# FireLab phone pose → Fire TV beat game
+# Fire Beats phone pose → Fire TV rhythm game
 
-FireLab pairs a phone browser with a native Fire TV app by QR code. The phone runs MediaPipe pose detection locally and sends normalized landmarks to the TV over WebRTC; camera video never leaves the phone.
+Fire Beats pairs a phone browser with a native Fire TV app by QR code. The phone runs MediaPipe pose detection locally and sends normalized landmarks to the TV over WebRTC; camera video never leaves the phone.
+
+The Android application ID is `io.github.ansellmaximilian.firebeats`. Launcher icons, the TV banner, splash screen, native pairing screen, and phone controller share the same Fire Beats identity.
 
 The long-running Node service hosts the phone UI, creates pairing rooms, relays WebRTC signaling over WebSockets, and analyzes uploaded audio. Neon supplies Managed Auth, Postgres metadata, and S3-compatible object storage:
 
@@ -50,7 +52,7 @@ The server loads the root `.env.local`, listens on every network interface, and 
 Android builds target `https://fire-beats.onrender.com` by default. Override that for an emulator connected to the local server with:
 
 ```powershell
-.\gradlew.bat :app:assembleDebug -PFIRELAB_SERVER_URL=http://10.0.2.2:3050
+.\gradlew.bat :app:assembleDebug -PFIREBEATS_SERVER_URL=http://10.0.2.2:3050
 ```
 
 Phone browsers require HTTPS for camera access. For local device testing, set `PUBLIC_URL` to an HTTPS tunnel or run the optional local TLS listener:
@@ -85,7 +87,7 @@ The checked-in Blueprint is still available and explicitly uses Render's free pl
 
 ## Pair and play
 
-1. Launch FireLab on the TV.
+1. Launch Fire Beats on the TV.
 2. Scan its QR code with the phone camera.
 3. Choose a public default track, or sign in with Google to upload/select a private track.
 4. Optionally take or choose a player photo. It remains in that phone browser.

@@ -3,11 +3,12 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-val fireLabServerUrl = providers.gradleProperty("FIRELAB_SERVER_URL")
+val fireBeatsServerUrl = providers.gradleProperty("FIREBEATS_SERVER_URL")
+    .orElse(providers.gradleProperty("FIRELAB_SERVER_URL"))
     .orElse("https://fire-beats.onrender.com")
 
 android {
-    namespace = "com.example.firelab"
+    namespace = "io.github.ansellmaximilian.firebeats"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -15,13 +16,13 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.firelab"
+        applicationId = "io.github.ansellmaximilian.firebeats"
         minSdk = 23
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
-        buildConfigField("String", "SERVER_URL", "\"${fireLabServerUrl.get()}\"")
+        buildConfigField("String", "SERVER_URL", "\"${fireBeatsServerUrl.get()}\"")
 
     }
 

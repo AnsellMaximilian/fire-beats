@@ -1,4 +1,4 @@
-package com.example.firelab
+package io.github.ansellmaximilian.firebeats
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -58,7 +58,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.tv.material3.Text
 import androidx.tv.material3.Button
 import androidx.tv.material3.ExperimentalTvMaterial3Api
-import com.example.firelab.ui.theme.FireLabTheme
+import io.github.ansellmaximilian.firebeats.ui.theme.FireBeatsTheme
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import org.webrtc.RendererCommon
@@ -78,7 +78,7 @@ class MainActivity : ComponentActivity() {
         receiver = ReceiverController(applicationContext, BuildConfig.SERVER_URL)
 
         setContent {
-            FireLabTheme {
+            FireBeatsTheme {
                 ReceiverScreen(receiver)
             }
         }
@@ -1234,8 +1234,16 @@ private fun PairingScreen(
     state: ReceiverUiState,
     onRetry: () -> Unit
 ) {
+    val context = LocalContext.current
     val qrCode = remember(state.phoneUrl) {
         state.phoneUrl?.let(::createQrCode)
+    }
+    val brandWordmark = remember {
+        BitmapFactory.decodeResource(
+            context.resources,
+            R.drawable.firebeats_wordmark,
+            BitmapFactory.Options().apply { inSampleSize = 4 }
+        ).asImageBitmap()
     }
     val statusPulse by rememberInfiniteTransition(label = "pairing-status").animateFloat(
         initialValue = 0.35f,
@@ -1279,6 +1287,11 @@ private fun PairingScreen(
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                Image(
+                    bitmap = brandWordmark,
+                    contentDescription = "Fire Beats",
+                    modifier = Modifier.size(width = 360.dp, height = 130.dp)
+                )
                 val statusColor =
                     if (state.error == null) Color(0xFFFDBA74) else Color(0xFFFCA5A5)
                 Row(

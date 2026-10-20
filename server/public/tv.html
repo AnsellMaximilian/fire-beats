@@ -3,7 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>FireLab receiver</title>
+    <meta name="theme-color" content="#080b12" />
+    <title>Fire Beats receiver</title>
+    <link rel="icon" type="image/png" href="/assets/firebeats-icon.png" />
     <link rel="stylesheet" href="/shared.css" />
     <style>
       body { overflow: hidden; }
@@ -16,6 +18,7 @@
       .card { display: grid; grid-template-columns: minmax(260px, 34vh) minmax(360px, 1fr); gap: 5vw; align-items: center; max-width: 1100px; }
       .qr { background: white; padding: 18px; border-radius: 24px; box-shadow: 0 25px 80px #0008; }
       .qr svg { display: block; width: 100%; height: auto; }
+      .brand-logo { display: block; width: min(520px, 50vw); height: auto; margin-bottom: 1.25rem; }
       h1 { margin: 0 0 1rem; font-size: clamp(2.2rem, 5vw, 4.6rem); line-height: 1; }
       p { font-size: clamp(1.1rem, 2vw, 1.6rem); line-height: 1.45; }
       code { color: #fdba74; }
@@ -28,9 +31,10 @@
       <div class="card">
         <div class="qr">__QR_SVG__</div>
         <div>
+          <img class="brand-logo" src="/assets/firebeats-wordmark.png" alt="Fire Beats" />
           <p class="status" id="status">Waiting for your phone</p>
-          <h1>Scan to share your camera</h1>
-          <p>Open the QR code with your phone, then tap <strong>Start camera</strong>.</p>
+          <h1>Scan to start moving</h1>
+          <p>Open the QR code with your phone, then tap <strong>Start pose tracking</strong>.</p>
           <p class="muted">Room <code id="room"></code></p>
         </div>
       </div>

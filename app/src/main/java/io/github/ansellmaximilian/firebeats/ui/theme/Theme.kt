@@ -1,4 +1,4 @@
-package com.example.firelab.ui.theme
+package io.github.ansellmaximilian.firebeats.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
@@ -9,21 +9,21 @@ import androidx.tv.material3.lightColorScheme
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-fun FireLabTheme(
+fun FireBeatsTheme(
     isInDarkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
     val colorScheme = if (isInDarkTheme) {
         darkColorScheme(
-            primary = Purple80,
-            secondary = PurpleGrey80,
-            tertiary = Pink80
+            primary = FireOrange,
+            secondary = FlameBlue,
+            tertiary = FlameRed
         )
     } else {
         lightColorScheme(
-            primary = Purple40,
-            secondary = PurpleGrey40,
-            tertiary = Pink40
+            primary = FireOrangeDark,
+            secondary = FlameBlueDark,
+            tertiary = FlameRedDark
         )
     }
     MaterialTheme(

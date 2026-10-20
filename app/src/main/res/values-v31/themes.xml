@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.FireBeats" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">@drawable/firebeats_splash_background</item>
+        <item name="android:windowSplashScreenBackground">@color/firebeats_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/firebeats_brand_mark</item>
+        <item name="android:windowSplashScreenAnimationDuration">350</item>
+        <item name="android:colorAccent">@color/firebeats_orange</item>
+        <item name="android:navigationBarColor">@color/firebeats_background</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

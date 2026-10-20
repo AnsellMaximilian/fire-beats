@@ -1,8 +1,8 @@
 {
-  "name": "firelab-webrtc-server",
+  "name": "fire-beats-server",
   "version": "0.1.0",
   "private": true,
-  "description": "Small HTTP/WebSocket signaling server for the FireLab WebRTC prototype",
+  "description": "Fire Beats phone-to-TV rhythm game server",
   "type": "module",
   "engines": {
     "node": ">=18"

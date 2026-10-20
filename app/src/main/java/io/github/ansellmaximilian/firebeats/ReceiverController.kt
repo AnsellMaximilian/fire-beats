@@ -1,4 +1,4 @@
-package com.example.firelab
+package io.github.ansellmaximilian.firebeats
 
 import android.content.Context
 import android.util.Log

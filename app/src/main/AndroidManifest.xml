@@ -14,12 +14,13 @@
 
     <application
         android:allowBackup="true"
-        android:banner="@mipmap/ic_launcher"
-        android:icon="@mipmap/ic_launcher"
+        android:banner="@drawable/firebeats_tv_banner"
+        android:icon="@mipmap/ic_firebeats"
         android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_firebeats"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
-        android:theme="@style/Theme.FireLab">
+        android:theme="@style/Theme.FireBeats">
         <activity
             android:name=".MainActivity"
             android:exported="true">

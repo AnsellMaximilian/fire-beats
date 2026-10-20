@@ -1,4 +1,4 @@
-package com.example.firelab
+package io.github.ansellmaximilian.firebeats
 
 import android.content.Context
 import android.media.AudioAttributes
@@ -32,7 +32,7 @@ internal class PopSoundPlayer(context: Context) {
             if (status == 0) loadedSoundId = sampleId
         }
         runCatching {
-            val soundFile = File(context.cacheDir, "firelab-bubble-pop-v1.wav")
+            val soundFile = File(context.cacheDir, "firebeats-hit-v1.wav")
             if (!soundFile.exists() || soundFile.length() == 0L) {
                 writeBubblePop(soundFile)
             }

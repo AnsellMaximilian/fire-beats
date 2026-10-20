@@ -3,21 +3,28 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Track pose for FireLab</title>
+    <meta name="theme-color" content="#080b12" />
+    <title>Fire Beats</title>
+    <link rel="icon" type="image/png" href="/assets/firebeats-icon.png" />
+    <link rel="apple-touch-icon" href="/assets/firebeats-icon.png" />
     <link rel="stylesheet" href="/shared.css" />
     <style>
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
-      body { min-height: 100dvh; margin: 0; padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem max(0.75rem, env(safe-area-inset-bottom)); display: grid; place-items: center; overflow: hidden; background: radial-gradient(circle at 50% -10%, #172554 0, #080b12 46%); }
+      body { min-height: 100dvh; margin: 0; padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem max(0.75rem, env(safe-area-inset-bottom)); display: grid; place-items: center; overflow: hidden; background: radial-gradient(circle at 20% -10%, #172554 0, #080b12 42%), radial-gradient(circle at 100% 0, #431407 0, transparent 38%); }
       button, input, select { font: inherit; }
       button { width: 100%; min-height: 3.25rem; border-radius: 16px; font-weight: 700; }
       h1 { margin: 0; font-size: clamp(1.7rem, 8vw, 2.25rem); }
       h2 { margin: 0 0 0.45rem; font-size: 1.55rem; }
-      .app-shell { width: min(100%, 560px); height: min(94dvh, 820px); display: grid; grid-template-rows: auto auto 1fr; border: 1px solid #26334a; border-radius: 28px; overflow: hidden; background: rgba(10, 15, 27, 0.96); box-shadow: 0 28px 80px rgba(0, 0, 0, 0.45); }
-      .app-header { padding: 1rem 1.1rem 0.8rem; border-bottom: 1px solid #1f2937; }
+      .app-shell { width: min(100%, 560px); height: min(94dvh, 820px); display: grid; grid-template-rows: auto auto 1fr auto; border: 1px solid #26334a; border-radius: 28px; overflow: hidden; background: rgba(10, 15, 27, 0.96); box-shadow: 0 28px 80px rgba(0, 0, 0, 0.45); }
+      .app-header { padding: 0.85rem 1.1rem 0.75rem; border-bottom: 1px solid #1f2937; background: linear-gradient(120deg, rgba(30, 58, 138, 0.2), rgba(124, 45, 18, 0.16)); }
       .brand-row, .status-row, .summary-row, .button-row { display: flex; align-items: center; gap: 0.75rem; }
       .brand-row { justify-content: space-between; }
-      .eyebrow { margin: 0 0 0.2rem; color: #60a5fa; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; }
+      .brand-lockup { width: min(48%, 13rem); min-width: 8.5rem; }
+      .brand-logo { display: block; width: 100%; height: auto; }
+      .header-actions { display: flex; align-items: flex-end; gap: 0.45rem; flex-direction: column; }
+      .header-auth { display: flex; justify-content: flex-end; gap: 0.4rem; }
+      .header-auth button { width: auto; min-height: 2.1rem; padding: 0.35rem 0.65rem; border-radius: 10px; font-size: 0.75rem; }
       .room-pill { padding: 0.45rem 0.7rem; border: 1px solid #334155; border-radius: 999px; color: #cbd5e1; font-size: 0.78rem; white-space: nowrap; }
       .status-row { margin-top: 0.8rem; color: #cbd5e1; font-size: 0.9rem; }
       .status-dot { width: 0.7rem; height: 0.7rem; flex: 0 0 auto; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5); animation: status-pulse 1.4s infinite; }
@@ -48,9 +55,8 @@
       progress { width: 100%; height: 0.7rem; margin-top: 1rem; accent-color: #38bdf8; }
       .compact-status { min-height: 1.4rem; margin: 0.55rem 0; font-size: 0.9rem; }
       .warning { margin: 0 1.1rem 0.7rem; padding: 0.75rem; border-radius: 14px; background: #7c2d12; color: #ffedd5; }
-      .auth-card { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0.65rem; margin-bottom: 0.9rem; padding: 0.75rem; border: 1px solid #334155; border-radius: 16px; background: #0f172a; }
+      .auth-card { display: grid; align-items: center; gap: 0.65rem; margin-bottom: 0.9rem; padding: 0.75rem; border: 1px solid #334155; border-radius: 16px; background: #0f172a; }
       .auth-card p { margin: 0; color: #cbd5e1; font-size: 0.86rem; }
-      .auth-card button { width: auto; min-height: 2.5rem; padding: 0.45rem 0.8rem; border-radius: 12px; }
       .avatar-stage { display: grid; place-items: center; min-height: 14rem; margin: 0.8rem 0; border: 1px dashed #334155; border-radius: 22px; background: #0f172a; }
       .avatar-preview { width: 11rem; height: 11rem; border-radius: 50%; object-fit: cover; border: 7px solid #f8fafc; box-shadow: 0 0 0 6px #3b82f6; }
       .avatar-placeholder { width: 9rem; height: 9rem; display: grid; place-items: center; border-radius: 50%; background: #1e293b; color: #64748b; font-size: 3rem; }
@@ -77,6 +83,10 @@
       .summary-avatar { width: 3rem; height: 3rem; border-radius: 50%; object-fit: cover; border: 3px solid #60a5fa; }
       .summary-label { margin: 0; color: #64748b; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; }
       .summary-value { margin: 0.18rem 0 0; color: #f8fafc; font-weight: 700; }
+      .app-footer { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.55rem 1.1rem max(0.55rem, env(safe-area-inset-bottom)); border-top: 1px solid #1f2937; color: #64748b; font-size: 0.7rem; }
+      .app-footer strong { color: #f97316; letter-spacing: 0.08em; text-transform: uppercase; }
+      .app-footer a { color: #94a3b8; text-decoration: none; }
+      .app-footer a:hover, .app-footer a:focus-visible { color: #e2e8f0; text-decoration: underline; }
       [hidden] { display: none !important; }
     </style>
   </head>
@@ -84,11 +94,16 @@
     <main class="app-shell">
       <header class="app-header">
         <div class="brand-row">
-          <div>
-            <p class="eyebrow">FireLab</p>
-            <h1>Ready your player</h1>
+          <div class="brand-lockup">
+            <img class="brand-logo" src="/assets/firebeats-wordmark.png" alt="Fire Beats" />
           </div>
-          <span class="room-pill">Room <strong id="roomLabel">--------</strong></span>
+          <div class="header-actions">
+            <div class="header-auth">
+              <button id="signIn" class="secondary" type="button" hidden>Sign in</button>
+              <button id="signOut" class="ghost" type="button" hidden>Sign out</button>
+            </div>
+            <span class="room-pill">Room <strong id="roomLabel">--------</strong></span>
+          </div>
         </div>
         <div class="status-row"><span id="statusDot" class="status-dot"></span><span id="status">Connecting to TV…</span></div>
       </header>
@@ -104,8 +119,6 @@
         <p class="lead">Default music works as a guest. Sign in only when you want your own private uploads.</p>
         <div class="auth-card">
           <p id="authStatus">Checking sign-in…</p>
-          <button id="signIn" class="secondary" type="button" hidden>Sign in with Google</button>
-          <button id="signOut" class="ghost" type="button" hidden>Sign out</button>
         </div>
         <div class="choice-grid">
           <button id="showUpload" class="choice" type="button"><strong>Upload new track</strong><span>Sign in, then choose an MP3 for your private library.</span></button>
@@ -179,6 +192,10 @@
           <button id="changePhoto" class="ghost" type="button">Change photo</button>
         </div>
       </section>
+      <footer class="app-footer">
+        <strong>Fire Beats</strong>
+        <a href="https://github.com/AnsellMaximilian/fire-tv" target="_blank" rel="noreferrer">GitHub · AnsellMaximilian</a>
+      </footer>
     </main>
     <script src="/auth-client.js"></script>
     <script type="module">
@@ -249,7 +266,8 @@
       const targetPoseFps = 30;
       const poseIntervalMs = 1000 / targetPoseFps;
       const maxUploadBytes = 50 * 1024 * 1024;
-      const avatarStorageKey = "firelab.avatar.v1";
+      const avatarStorageKey = "firebeats.avatar.v1";
+      const legacyAvatarStorageKey = "firelab.avatar.v1";
       const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
       const visionModuleUrl = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs";
       const visionWasmUrl = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
@@ -292,8 +310,12 @@
 
       function restoreSavedAvatar() {
         try {
-          const saved = localStorage.getItem(avatarStorageKey);
+          const saved = localStorage.getItem(avatarStorageKey) ||
+            localStorage.getItem(legacyAvatarStorageKey);
           if (!saved || saved.length > 250_000 || !/^data:image\/(?:jpeg|png|webp);base64,/i.test(saved)) return;
+          if (!localStorage.getItem(avatarStorageKey)) {
+            localStorage.setItem(avatarStorageKey, saved);
+          }
           selectedAvatarDataUrl = saved;
           avatarPreview.src = saved;
           avatarPreview.hidden = false;

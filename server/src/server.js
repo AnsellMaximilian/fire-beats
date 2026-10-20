@@ -50,8 +50,14 @@ const clients = new Map();
 const selectedTracksByRoom = new Map();
 const avatarsByRoom = new Map();
 const socketServers = new Set();
+const publicImageAssets = new Set([
+  "firebeats-brand-mark.png",
+  "firebeats-icon.png",
+  "firebeats-wordmark.png",
+]);
 
 const readPage = (name) => fs.readFileSync(path.join(publicDirectory, name), "utf8");
+const readImageAsset = (name) => fs.readFileSync(path.join(publicDirectory, "assets", name));
 
 function localAddress() {
   for (const interfaces of Object.values(os.networkInterfaces())) {
@@ -78,8 +84,11 @@ function createSession(request) {
 
 function send(response, status, type, body, headers = {}) {
   if (response.headersSent) return;
+  const contentType = type.startsWith("text/") || type === "application/json"
+    ? `${type}; charset=utf-8`
+    : type;
   response.writeHead(status, {
-    "content-type": `${type}; charset=utf-8`,
+    "content-type": contentType,
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
     ...headers,
@@ -302,6 +311,12 @@ async function requestHandler(request, response) {
   if (url.pathname === "/shared.css") return send(response, 200, "text/css", readPage("shared.css"));
   if (url.pathname === "/auth-client.js") {
     return send(response, 200, "text/javascript", readPage("auth-client.js"));
+  }
+  const imageAssetMatch = url.pathname.match(/^\/assets\/([a-z0-9-]+\.png)$/);
+  if (imageAssetMatch && publicImageAssets.has(imageAssetMatch[1])) {
+    return send(response, 200, "image/png", readImageAsset(imageAssetMatch[1]), {
+      "cache-control": "public, max-age=604800, immutable",
+    });
   }
   send(response, 404, "text/plain", "Not found");
 }

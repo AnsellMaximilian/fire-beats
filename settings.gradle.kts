@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "FireLab"
+rootProject.name = "FireBeats"
 include(":app")
