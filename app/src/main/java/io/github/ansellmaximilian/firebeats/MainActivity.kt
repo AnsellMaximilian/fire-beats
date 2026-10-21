@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -1255,99 +1256,109 @@ private fun PairingScreen(
         label = "pairing-status-pulse"
     )
 
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF080B12)),
-        contentAlignment = Alignment.Center
+            .background(Color(0xFF080B12))
+            .padding(horizontal = 48.dp, vertical = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(56.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(48.dp)
-        ) {
-            if (qrCode != null) {
-                Image(
-                    bitmap = qrCode.asImageBitmap(),
-                    contentDescription = "Pair phone QR code",
-                    modifier = Modifier
-                        .size(300.dp)
-                        .background(Color.White)
-                        .padding(12.dp)
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(300.dp)
-                        .background(Color(0xFF172033)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("…", color = Color.White, fontSize = 64.sp)
-                }
-            }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Image(
+                bitmap = brandWordmark,
+                contentDescription = "Fire Beats",
+                modifier = Modifier.size(width = 360.dp, height = 130.dp)
+            )
+        }
 
-            Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                Image(
-                    bitmap = brandWordmark,
-                    contentDescription = "Fire Beats",
-                    modifier = Modifier.size(width = 360.dp, height = 130.dp)
-                )
-                val statusColor =
-                    if (state.error == null) Color(0xFFFDBA74) else Color(0xFFFCA5A5)
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(56.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (qrCode != null) {
+                    Image(
+                        bitmap = qrCode.asImageBitmap(),
+                        contentDescription = "Pair phone QR code",
+                        modifier = Modifier
+                            .size(300.dp)
+                            .background(Color.White)
+                            .padding(12.dp)
+                    )
+                } else {
                     Box(
                         modifier = Modifier
-                            .size((12f + statusPulse * 6f).dp)
-                            .background(
-                                statusColor.copy(alpha = 0.35f + statusPulse * 0.65f),
-                                CircleShape
-                            )
-                    )
-                    Text(
-                        text = state.status,
-                        color = statusColor,
-                        fontSize = 22.sp
-                    )
+                            .size(300.dp)
+                            .background(Color(0xFF172033)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("…", color = Color.White, fontSize = 64.sp)
+                    }
                 }
-                Text(
-                    text = "Scan QR to start pose play",
-                    color = Color.White,
-                    fontSize = 40.sp,
-                    lineHeight = 48.sp
-                )
-                Text(
-                    text = "Open the QR code with your phone, then tap Start pose tracking.",
-                    color = Color(0xFF94A3B8),
-                    fontSize = 24.sp,
-                    lineHeight = 30.sp
-                )
-                state.room?.let { room ->
-                    Text(
-                        text = "Room ${room.take(8)}…",
-                        color = Color(0xFFFDBA74),
-                        fontSize = 20.sp
-                    )
-                }
-                state.error?.let { error ->
-                    Text(
-                        text = error,
-                        color = Color(0xFFFCA5A5),
-                        fontSize = 18.sp
-                    )
-                }
-                if (!state.signalingConnected && state.room != null) {
-                    Button(onClick = onRetry) {
+
+                Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                    val statusColor =
+                        if (state.error == null) Color(0xFFFDBA74) else Color(0xFFFCA5A5)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size((12f + statusPulse * 6f).dp)
+                                .background(
+                                    statusColor.copy(alpha = 0.35f + statusPulse * 0.65f),
+                                    CircleShape
+                                )
+                        )
                         Text(
-                            text = if (state.signalingRetryAttempt > 0) {
-                                "Retry now"
-                            } else {
-                                "Connect again"
-                            },
+                            text = state.status,
+                            color = statusColor,
+                            fontSize = 22.sp
+                        )
+                    }
+                    Text(
+                        text = "Scan QR to start pose play",
+                        color = Color.White,
+                        fontSize = 40.sp,
+                        lineHeight = 48.sp
+                    )
+                    Text(
+                        text = "Open the QR code with your phone, then tap Start pose tracking.",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 24.sp,
+                        lineHeight = 30.sp
+                    )
+                    state.room?.let { room ->
+                        Text(
+                            text = "Room ${room.take(8)}…",
+                            color = Color(0xFFFDBA74),
                             fontSize = 20.sp
                         )
+                    }
+                    state.error?.let { error ->
+                        Text(
+                            text = error,
+                            color = Color(0xFFFCA5A5),
+                            fontSize = 18.sp
+                        )
+                    }
+                    if (!state.signalingConnected && state.room != null) {
+                        Button(onClick = onRetry) {
+                            Text(
+                                text = if (state.signalingRetryAttempt > 0) {
+                                    "Retry now"
+                                } else {
+                                    "Connect again"
+                                },
+                                fontSize = 20.sp
+                            )
+                        }
                     }
                 }
             }
