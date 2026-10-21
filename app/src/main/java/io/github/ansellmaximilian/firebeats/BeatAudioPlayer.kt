@@ -52,6 +52,20 @@ internal class BeatAudioPlayer {
         return true
     }
 
+    fun pause(): Boolean {
+        val mediaPlayer = player ?: return false
+        if (!ready || !mediaPlayer.isPlaying) return false
+        mediaPlayer.pause()
+        return true
+    }
+
+    fun resume(): Boolean {
+        val mediaPlayer = player ?: return false
+        if (!ready || mediaPlayer.isPlaying) return false
+        mediaPlayer.start()
+        return true
+    }
+
     fun positionSeconds(): Float = if (ready) {
         (player?.currentPosition ?: 0) / 1_000f
     } else {

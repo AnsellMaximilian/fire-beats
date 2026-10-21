@@ -93,6 +93,10 @@ The checked-in Blueprint is still available and explicitly uses Render's free pl
 4. Optionally take or choose a player photo. It remains in that phone browser.
 5. Start pose tracking, grant camera permission, and follow the TV calibration prompts.
 
+During an active round on Fire TV, say **“Alexa, pause”** or **“Alexa, play”**
+through the Voice Remote or a paired Echo. The Play/Pause media button uses the
+same Android MediaSession controls.
+
 ## Verification
 
 ```powershell

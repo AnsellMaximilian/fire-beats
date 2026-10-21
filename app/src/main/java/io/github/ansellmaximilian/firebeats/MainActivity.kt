@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -168,6 +169,7 @@ private fun PoseScreen(state: ReceiverUiState) {
     var audioReady by remember { mutableStateOf(false) }
     var playbackStarted by remember { mutableStateOf(false) }
     var playbackCompleted by remember { mutableStateOf(false) }
+    var gamePaused by remember { mutableStateOf(false) }
     var gameFinished by remember { mutableStateOf(false) }
     var audioError by remember { mutableStateOf<String?>(null) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -229,11 +231,15 @@ private fun PoseScreen(state: ReceiverUiState) {
     val localScoreboard = remember(context) {
         LocalScoreboard(context.applicationContext)
     }
+    val voicePlaybackController = remember(context) {
+        VoicePlaybackController(context.applicationContext)
+    }
 
-    DisposableEffect(popSoundPlayer, beatAudioPlayer) {
+    DisposableEffect(popSoundPlayer, beatAudioPlayer, voicePlaybackController) {
         onDispose {
             popSoundPlayer.release()
             beatAudioPlayer.release()
+            voicePlaybackController.release()
         }
     }
 
@@ -248,6 +254,7 @@ private fun PoseScreen(state: ReceiverUiState) {
         audioReady = false
         playbackStarted = false
         playbackCompleted = false
+        gamePaused = false
         gameFinished = false
         audioError = null
         hitEffects = emptyList()
@@ -267,7 +274,10 @@ private fun PoseScreen(state: ReceiverUiState) {
             beatAudioPlayer.load(
                 url = track.audioUrl,
                 onReady = { audioReady = true },
-                onCompleted = { playbackCompleted = true },
+                onCompleted = {
+                    gamePaused = false
+                    playbackCompleted = true
+                },
                 onError = { message -> audioError = message }
             )
         } ?: beatAudioPlayer.reset()
@@ -301,6 +311,7 @@ private fun PoseScreen(state: ReceiverUiState) {
             val elapsedSeconds =
                 ((frameTime - lastFrameTime) / 1_000_000_000f).coerceAtMost(0.05f)
             lastFrameTime = frameTime
+            if (gamePaused) continue
             hitEffects = hitEffects
                 .map { it.copy(ageSeconds = it.ageSeconds + elapsedSeconds) }
                 .filter { it.ageSeconds < HIT_EFFECT_SECONDS }
@@ -516,6 +527,7 @@ private fun PoseScreen(state: ReceiverUiState) {
         preRollRemainingSeconds = NOTE_TRAVEL_SECONDS
         playbackStarted = false
         playbackCompleted = false
+        gamePaused = false
         gameFinished = false
         audioError = null
         hitEffects = emptyList()
@@ -533,6 +545,52 @@ private fun PoseScreen(state: ReceiverUiState) {
             readyProgress = 0f
         }
         Log.i("FireTV", "Starting another round; recalibrate=$shouldRecalibrate")
+    }
+
+    val voicePlaybackStatus = when {
+        selectedTrack == null || !audioReady || calibration == null ->
+            VoicePlaybackStatus.UNAVAILABLE
+        gameFinished || playbackCompleted -> VoicePlaybackStatus.FINISHED
+        gamePaused -> VoicePlaybackStatus.PAUSED
+        playbackStarted -> VoicePlaybackStatus.PLAYING
+        else -> VoicePlaybackStatus.READY
+    }
+    SideEffect {
+        voicePlaybackController.setCallbacks(
+            onPlay = {
+                if (
+                    selectedTrack != null &&
+                    audioReady &&
+                    calibration != null &&
+                    !gameFinished
+                ) {
+                    if (!playbackStarted || beatAudioPlayer.resume() || beatAudioPlayer.isPlaying()) {
+                        gamePaused = false
+                        Log.i("FireTV", "Beat game resumed through MediaSession")
+                    }
+                }
+            },
+            onPause = {
+                if (
+                    selectedTrack != null &&
+                    audioReady &&
+                    calibration != null &&
+                    !gameFinished
+                ) {
+                    if (!playbackStarted || beatAudioPlayer.pause() || !beatAudioPlayer.isPlaying()) {
+                        gamePaused = true
+                        Log.i("FireTV", "Beat game paused through MediaSession")
+                    }
+                }
+            }
+        )
+    }
+    LaunchedEffect(selectedTrack?.id, voicePlaybackStatus) {
+        voicePlaybackController.update(
+            track = selectedTrack,
+            positionSeconds = songPositionSeconds,
+            status = voicePlaybackStatus
+        )
     }
 
     Box(
@@ -942,6 +1000,32 @@ private fun PoseScreen(state: ReceiverUiState) {
                     .align(Alignment.BottomCenter)
                     .padding(24.dp)
             )
+        }
+
+        if (gamePaused && !gameFinished) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.78f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "PAUSED",
+                        color = Color.White,
+                        fontSize = 54.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                    Text(
+                        text = "Say “Alexa, play” or press Play/Pause to continue",
+                        color = Color(0xFFFDBA74),
+                        fontSize = 24.sp
+                    )
+                }
+            }
         }
 
         val finishedTrack = selectedTrack
