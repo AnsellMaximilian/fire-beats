@@ -8,6 +8,8 @@ import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -16,15 +18,21 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -39,18 +47,32 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -145,6 +167,8 @@ private fun PoseScreen(state: ReceiverUiState) {
     var preRollRemainingSeconds by remember { mutableFloatStateOf(NOTE_TRAVEL_SECONDS) }
     var audioReady by remember { mutableStateOf(false) }
     var playbackStarted by remember { mutableStateOf(false) }
+    var playbackCompleted by remember { mutableStateOf(false) }
+    var gameFinished by remember { mutableStateOf(false) }
     var audioError by remember { mutableStateOf<String?>(null) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     var calibration by remember { mutableStateOf<PoseBounds?>(null) }
@@ -155,6 +179,11 @@ private fun PoseScreen(state: ReceiverUiState) {
     var readyProgress by remember { mutableFloatStateOf(0f) }
     var hitEffects by remember { mutableStateOf(emptyList<HitEffect>()) }
     var scorePopup by remember { mutableStateOf<ScorePopup?>(null) }
+    var initials by remember { mutableStateOf("AAA") }
+    var selectedInitialIndex by remember { mutableIntStateOf(0) }
+    var scoreSaved by remember { mutableStateOf(false) }
+    var savedScoreId by remember { mutableStateOf<String?>(null) }
+    var localLeaderboard by remember { mutableStateOf(emptyList<LocalScoreEntry>()) }
     val avatarBitmap = remember(state.avatarDataUrl) {
         decodeAvatarBitmap(state.avatarDataUrl)?.asImageBitmap()
     }
@@ -197,6 +226,9 @@ private fun PoseScreen(state: ReceiverUiState) {
         PopSoundPlayer(context.applicationContext)
     }
     val beatAudioPlayer = remember { BeatAudioPlayer() }
+    val localScoreboard = remember(context) {
+        LocalScoreboard(context.applicationContext)
+    }
 
     DisposableEffect(popSoundPlayer, beatAudioPlayer) {
         onDispose {
@@ -215,9 +247,18 @@ private fun PoseScreen(state: ReceiverUiState) {
         preRollRemainingSeconds = NOTE_TRAVEL_SECONDS
         audioReady = false
         playbackStarted = false
+        playbackCompleted = false
+        gameFinished = false
         audioError = null
         hitEffects = emptyList()
         scorePopup = null
+        initials = localScoreboard.lastInitials()
+        selectedInitialIndex = 0
+        scoreSaved = false
+        savedScoreId = null
+        localLeaderboard = selectedTrack?.let { track ->
+            localScoreboard.entriesForTrack(track.id)
+        }.orEmpty()
         selectedTrack?.let { track ->
             Log.i(
                 "FireTV",
@@ -226,12 +267,29 @@ private fun PoseScreen(state: ReceiverUiState) {
             beatAudioPlayer.load(
                 url = track.audioUrl,
                 onReady = { audioReady = true },
+                onCompleted = { playbackCompleted = true },
                 onError = { message -> audioError = message }
             )
         } ?: beatAudioPlayer.reset()
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(playbackCompleted) {
+        if (!playbackCompleted || gameFinished) return@LaunchedEffect
+        val remainingNotes = activeNotes.size +
+            (currentChart.size - nextBeatIndex).coerceAtLeast(0)
+        misses += remainingNotes
+        combo = 0
+        activeNotes = emptyList()
+        scorePopup = null
+        gameFinished = true
+        Log.i(
+            "FireTV",
+            "Beat game finished; score=$score misses=$misses remainingNotes=$remainingNotes"
+        )
+    }
+
+    LaunchedEffect(gameFinished) {
+        if (gameFinished) return@LaunchedEffect
         var lastFrameTime = withFrameNanos { it }
         var lastIncomingTimestamp = Long.MIN_VALUE
         var interpolationStart: PoseFrame? = null
@@ -446,6 +504,35 @@ private fun PoseScreen(state: ReceiverUiState) {
                 )
             }
         }
+    }
+
+    val restartRound: (Boolean) -> Unit = { shouldRecalibrate ->
+        activeNotes = emptyList()
+        score = 0
+        misses = 0
+        combo = 0
+        nextBeatIndex = 0
+        songPositionSeconds = 0f
+        preRollRemainingSeconds = NOTE_TRAVEL_SECONDS
+        playbackStarted = false
+        playbackCompleted = false
+        gameFinished = false
+        audioError = null
+        hitEffects = emptyList()
+        scorePopup = null
+        initials = localScoreboard.lastInitials()
+        selectedInitialIndex = 0
+        scoreSaved = false
+        savedScoreId = null
+        if (shouldRecalibrate) {
+            calibration = null
+            calibrationStage = CalibrationStage.TOP_CORNERS
+            topCornerHands = null
+            bottomCornerHands = null
+            calibrationProgress = 0f
+            readyProgress = 0f
+        }
+        Log.i("FireTV", "Starting another round; recalibrate=$shouldRecalibrate")
     }
 
     Box(
@@ -856,7 +943,475 @@ private fun PoseScreen(state: ReceiverUiState) {
                     .padding(24.dp)
             )
         }
+
+        val finishedTrack = selectedTrack
+        if (gameFinished && finishedTrack != null) {
+            GameResultsScreen(
+                track = finishedTrack,
+                score = score,
+                misses = misses,
+                initials = initials,
+                selectedInitialIndex = selectedInitialIndex,
+                scoreSaved = scoreSaved,
+                savedScoreId = savedScoreId,
+                leaderboard = localLeaderboard,
+                scoreboard = localScoreboard,
+                avatarDataUrl = state.avatarDataUrl,
+                onInitialsChanged = { initials = it },
+                onSelectedInitialChanged = { selectedInitialIndex = it },
+                onSaveScore = {
+                    if (!scoreSaved) {
+                        val (entry, entries) = localScoreboard.save(
+                            initials = initials,
+                            score = score,
+                            misses = misses,
+                            track = finishedTrack,
+                            avatarDataUrl = state.avatarDataUrl
+                        )
+                        savedScoreId = entry.id
+                        localLeaderboard = entries
+                        scoreSaved = true
+                        Log.i(
+                            "FireTV",
+                            "Local score saved; initials=${entry.initials} score=${entry.score} " +
+                                "track=${entry.trackName}"
+                        )
+                    }
+                },
+                onPlayAgain = { restartRound(false) },
+                onNextPlayer = { restartRound(true) }
+            )
+        }
     }
+}
+
+@Composable
+@OptIn(ExperimentalTvMaterial3Api::class)
+private fun GameResultsScreen(
+    track: BeatTrack,
+    score: Int,
+    misses: Int,
+    initials: String,
+    selectedInitialIndex: Int,
+    scoreSaved: Boolean,
+    savedScoreId: String?,
+    leaderboard: List<LocalScoreEntry>,
+    scoreboard: LocalScoreboard,
+    avatarDataUrl: String?,
+    onInitialsChanged: (String) -> Unit,
+    onSelectedInitialChanged: (Int) -> Unit,
+    onSaveScore: () -> Unit,
+    onPlayAgain: () -> Unit,
+    onNextPlayer: () -> Unit
+) {
+    val context = LocalContext.current
+    val wordmark = remember {
+        BitmapFactory.decodeResource(
+            context.resources,
+            R.drawable.firebeats_wordmark,
+            BitmapFactory.Options().apply { inSampleSize = 4 }
+        ).asImageBitmap()
+    }
+    val currentAvatar = remember(avatarDataUrl) {
+        decodeAvatarBitmap(avatarDataUrl)?.asImageBitmap()
+    }
+    val animatedScore = remember(score) { Animatable(0f) }
+    val playAgainFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(score) {
+        animatedScore.snapTo(0f)
+        animatedScore.animateTo(
+            targetValue = score.toFloat(),
+            animationSpec = tween(durationMillis = 1_500, easing = FastOutSlowInEasing)
+        )
+    }
+    LaunchedEffect(scoreSaved) {
+        if (scoreSaved) playAgainFocusRequester.requestFocus()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF080B12))
+            .padding(horizontal = 36.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Image(
+                bitmap = wordmark,
+                contentDescription = "Fire Beats",
+                modifier = Modifier.size(width = 230.dp, height = 82.dp)
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = "ROUND COMPLETE",
+                color = Color(0xFFFDBA74),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(0.9f)
+                    .fillMaxSize()
+                    .background(Color(0xFF111827), RoundedCornerShape(20.dp))
+                    .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(18.dp)
+                ) {
+                    ScoreboardAvatar(
+                        avatar = currentAvatar,
+                        fallback = initials,
+                        size = 58.dp,
+                        highlighted = true
+                    )
+                    Column {
+                        Text(
+                            text = track.name,
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "$misses missed",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 15.sp
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = animatedScore.value.roundToInt().toString(),
+                    color = Color(0xFFFF6A00),
+                    fontSize = 64.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 68.sp
+                )
+                Text(
+                    text = "FINAL SCORE",
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (scoreSaved) {
+                    Text(
+                        text = "$initials SAVED ON THIS FIRE TV",
+                        color = Color(0xFF34D399),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    )
+                } else {
+                    Text(
+                        text = "ENTER YOUR INITIALS",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    ArcadeInitialsSelector(
+                        initials = initials,
+                        selectedIndex = selectedInitialIndex,
+                        onInitialsChanged = onInitialsChanged,
+                        onSelectedIndexChanged = onSelectedInitialChanged,
+                        onConfirm = onSaveScore
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "↑/↓ change  •  ←/→ move  •  SELECT save",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+
+            LocalLeaderboardPanel(
+                entries = leaderboard,
+                highlightedEntryId = savedScoreId,
+                scoreboard = scoreboard,
+                modifier = Modifier
+                    .weight(1.1f)
+                    .fillMaxSize()
+            )
+        }
+
+        if (scoreSaved) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = onPlayAgain,
+                    modifier = Modifier.focusRequester(playAgainFocusRequester)
+                ) {
+                    Text("Play again", fontSize = 18.sp)
+                }
+                Spacer(modifier = Modifier.width(18.dp))
+                Button(onClick = onNextPlayer) {
+                    Text("Next player · recalibrate", fontSize = 18.sp)
+                }
+                Spacer(modifier = Modifier.width(24.dp))
+                Text(
+                    text = "Choose another track on the phone at any time",
+                    color = Color(0xFF64748B),
+                    fontSize = 15.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArcadeInitialsSelector(
+    initials: String,
+    selectedIndex: Int,
+    onInitialsChanged: (String) -> Unit,
+    onSelectedIndexChanged: (Int) -> Unit,
+    onConfirm: () -> Unit
+) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
+    Row(
+        modifier = Modifier
+            .focusRequester(focusRequester)
+            .onPreviewKeyEvent { event ->
+                val key = event.key
+                val handled = key == Key.DirectionUp ||
+                    key == Key.DirectionDown ||
+                    key == Key.DirectionLeft ||
+                    key == Key.DirectionRight ||
+                    key == Key.DirectionCenter ||
+                    key == Key.Enter ||
+                    key == Key.NumPadEnter ||
+                    key == Key.ButtonA
+                if (!handled) {
+                    false
+                } else if (event.type != KeyEventType.KeyDown) {
+                    true
+                } else {
+                    when (key) {
+                        Key.DirectionUp -> onInitialsChanged(
+                            cycleInitial(initials, selectedIndex, 1)
+                        )
+                        Key.DirectionDown -> onInitialsChanged(
+                            cycleInitial(initials, selectedIndex, -1)
+                        )
+                        Key.DirectionLeft -> onSelectedIndexChanged(
+                            (selectedIndex - 1).coerceAtLeast(0)
+                        )
+                        Key.DirectionRight -> onSelectedIndexChanged(
+                            (selectedIndex + 1).coerceAtMost(2)
+                        )
+                        else -> onConfirm()
+                    }
+                    true
+                }
+            }
+            .focusable(),
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        initials.padEnd(3, 'A').take(3).forEachIndexed { index, letter ->
+            val selected = index == selectedIndex
+            Box(
+                modifier = Modifier
+                    .size(width = 58.dp, height = 64.dp)
+                    .background(
+                        color = if (selected) Color(0xFFFF6A00) else Color(0xFF1E293B),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .border(
+                        width = if (selected) 4.dp else 2.dp,
+                        color = if (selected) Color.White else Color(0xFF475569),
+                        shape = RoundedCornerShape(12.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = letter.toString(),
+                    color = Color.White,
+                    fontSize = 38.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalLeaderboardPanel(
+    entries: List<LocalScoreEntry>,
+    highlightedEntryId: String?,
+    scoreboard: LocalScoreboard,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .background(Color(0xFF111827), RoundedCornerShape(20.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = "LOCAL LEADERBOARD",
+            color = Color.White,
+            fontSize = 23.sp,
+            fontWeight = FontWeight.Black
+        )
+        Text(
+            text = "Top scores for this track",
+            color = Color(0xFF94A3B8),
+            fontSize = 15.sp
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+
+        if (entries.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF0F172A), RoundedCornerShape(16.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "No scores yet\nClaim the first spot!",
+                    color = Color(0xFF94A3B8),
+                    fontSize = 19.sp,
+                    lineHeight = 26.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else {
+            entries.take(5).forEachIndexed { index, entry ->
+                val highlighted = entry.id == highlightedEntryId
+                val avatar = remember(entry.avatarFileName) {
+                    scoreboard.avatarFile(entry)
+                        ?.let { file -> BitmapFactory.decodeFile(file.absolutePath) }
+                        ?.asImageBitmap()
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = if (highlighted) {
+                                Color(0xFF7C2D12)
+                            } else {
+                                Color(0xFF0F172A)
+                            },
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .border(
+                            width = if (highlighted) 2.dp else 1.dp,
+                            color = if (highlighted) Color(0xFFFFA94D) else Color(0xFF1E293B),
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${index + 1}",
+                        color = if (index < 3) Color(0xFFFDBA74) else Color(0xFF64748B),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.width(26.dp)
+                    )
+                    ScoreboardAvatar(
+                        avatar = avatar,
+                        fallback = entry.initials,
+                        size = 38.dp,
+                        highlighted = highlighted
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = entry.initials,
+                        color = Color.White,
+                        fontSize = 21.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = entry.score.toString(),
+                            color = if (highlighted) Color(0xFFFDBA74) else Color.White,
+                            fontSize = 21.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "${entry.misses} miss",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScoreboardAvatar(
+    avatar: ImageBitmap?,
+    fallback: String,
+    size: androidx.compose.ui.unit.Dp,
+    highlighted: Boolean
+) {
+    val borderColor = if (highlighted) Color(0xFFFDBA74) else Color(0xFF3B82F6)
+    if (avatar != null) {
+        Image(
+            bitmap = avatar,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(size)
+                .clip(CircleShape)
+                .border(3.dp, borderColor, CircleShape)
+        )
+    } else {
+        Box(
+            modifier = Modifier
+                .size(size)
+                .background(Color(0xFF1E293B), CircleShape)
+                .border(3.dp, borderColor, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = fallback.take(1).ifBlank { "?" },
+                color = Color.White,
+                fontSize = (size.value * 0.42f).sp,
+                fontWeight = FontWeight.Black
+            )
+        }
+    }
+}
+
+private fun cycleInitial(initials: String, index: Int, amount: Int): String {
+    val letters = initials.padEnd(3, 'A').take(3).toCharArray()
+    val safeIndex = index.coerceIn(0, 2)
+    val current = (letters[safeIndex] - 'A').coerceIn(0, 25)
+    letters[safeIndex] = 'A' + (current + amount + 26) % 26
+    return letters.concatToString()
 }
 
 private data class BeatNote(

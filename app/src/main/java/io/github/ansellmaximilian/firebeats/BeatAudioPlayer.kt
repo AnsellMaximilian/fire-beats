@@ -11,6 +11,7 @@ internal class BeatAudioPlayer {
     fun load(
         url: String,
         onReady: () -> Unit,
+        onCompleted: () -> Unit,
         onError: (String) -> Unit
     ) {
         reset()
@@ -25,6 +26,10 @@ internal class BeatAudioPlayer {
                 ready = true
                 Log.i("FireTV", "Beat track audio prepared")
                 onReady()
+            }
+            setOnCompletionListener {
+                Log.i("FireTV", "Beat track audio completed")
+                onCompleted()
             }
             setOnErrorListener { _, what, extra ->
                 ready = false
