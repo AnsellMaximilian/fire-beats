@@ -91,6 +91,7 @@ import kotlinx.coroutines.isActive
 import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
@@ -179,6 +180,8 @@ private fun PoseScreen(state: ReceiverUiState) {
     var bottomCornerHands by remember { mutableStateOf<CalibrationHands?>(null) }
     var calibrationProgress by remember { mutableFloatStateOf(0f) }
     var readyProgress by remember { mutableFloatStateOf(0f) }
+    var leftHandInReadyTarget by remember { mutableStateOf(false) }
+    var rightHandInReadyTarget by remember { mutableStateOf(false) }
     var hitEffects by remember { mutableStateOf(emptyList<HitEffect>()) }
     var scorePopup by remember { mutableStateOf<ScorePopup?>(null) }
     var initials by remember { mutableStateOf("AAA") }
@@ -217,7 +220,21 @@ private fun PoseScreen(state: ReceiverUiState) {
             BitmapFactory.Options().apply { inSampleSize = 4 }
         ).asImageBitmap()
     }
+    val readyUpBitmap = remember {
+        BitmapFactory.decodeResource(
+            context.resources,
+            R.drawable.firebeats_ready_up,
+            BitmapFactory.Options().apply { inSampleSize = 4 }
+        ).asImageBitmap()
+    }
     val scorePopupPaint = remember {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textAlign = android.graphics.Paint.Align.CENTER
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+    }
+    val readyCountdownPaint = remember {
         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
             color = android.graphics.Color.WHITE
             textAlign = android.graphics.Paint.Align.CENTER
@@ -342,6 +359,8 @@ private fun PoseScreen(state: ReceiverUiState) {
                     when (calibrationStage) {
                         CalibrationStage.TOP_CORNERS,
                         CalibrationStage.BOTTOM_CORNERS -> {
+                            leftHandInReadyTarget = false
+                            rightHandInReadyTarget = false
                             val direction = if (calibrationStage == CalibrationStage.TOP_CORNERS) {
                                 DiagonalDirection.UP
                             } else {
@@ -381,9 +400,10 @@ private fun PoseScreen(state: ReceiverUiState) {
                         }
 
                         CalibrationStage.READY -> {
-                            val readyTarget = pose.readyTarget(
-                                canvasSize.width.toFloat(),
-                                canvasSize.height.toFloat()
+                            val readyTargets = pose.readyTargets(
+                                topHands = topCornerHands,
+                                targetWidth = canvasSize.width.toFloat(),
+                                targetHeight = canvasSize.height.toFloat()
                             )
                             val leftWrist = pose.screenPoint(
                                 TargetHand.LEFT.wristIndex,
@@ -395,11 +415,15 @@ private fun PoseScreen(state: ReceiverUiState) {
                                 canvasSize.width.toFloat(),
                                 canvasSize.height.toFloat()
                             )
-                            val bothHandsReady = readyTarget != null &&
+                            leftHandInReadyTarget = readyTargets != null &&
                                 leftWrist != null &&
+                                (leftWrist - readyTargets.left.center).getDistance() <=
+                                readyTargets.left.radius
+                            rightHandInReadyTarget = readyTargets != null &&
                                 rightWrist != null &&
-                                (leftWrist - readyTarget.center).getDistance() <= readyTarget.radius &&
-                                (rightWrist - readyTarget.center).getDistance() <= readyTarget.radius
+                                (rightWrist - readyTargets.right.center).getDistance() <=
+                                readyTargets.right.radius
+                            val bothHandsReady = leftHandInReadyTarget && rightHandInReadyTarget
 
                             readyProgress = if (bothHandsReady) {
                                 (readyProgress + elapsedSeconds / READY_HOLD_SECONDS)
@@ -421,6 +445,10 @@ private fun PoseScreen(state: ReceiverUiState) {
                             }
                         }
                     }
+                } else if (calibrationStage == CalibrationStage.READY) {
+                    leftHandInReadyTarget = false
+                    rightHandInReadyTarget = false
+                    readyProgress = (readyProgress - elapsedSeconds * 1.5f).coerceAtLeast(0f)
                 }
                 continue
             }
@@ -543,6 +571,8 @@ private fun PoseScreen(state: ReceiverUiState) {
             bottomCornerHands = null
             calibrationProgress = 0f
             readyProgress = 0f
+            leftHandInReadyTarget = false
+            rightHandInReadyTarget = false
         }
         Log.i("FireTV", "Starting another round; recalibrate=$shouldRecalibrate")
     }
@@ -698,38 +728,15 @@ private fun PoseScreen(state: ReceiverUiState) {
                         bottomCornerHands?.left?.let { it to TargetHand.LEFT },
                         bottomCornerHands?.right?.let { it to TargetHand.RIGHT }
                     )
-                    val cornerOutline = if (topCornerHands != null && bottomCornerHands != null) {
-                        listOf(
-                            topCornerHands!!.left,
-                            topCornerHands!!.right,
-                            bottomCornerHands!!.right,
-                            bottomCornerHands!!.left,
-                            topCornerHands!!.left
-                        )
-                    } else {
-                        emptyList()
-                    }
-                    cornerOutline.zipWithNext().forEach { (start, end) ->
-                        drawLine(
-                            color = Color(0xFF38BDF8).copy(alpha = 0.6f),
-                            start = frame.worldToScreen(start, size.width, size.height),
-                            end = frame.worldToScreen(end, size.width, size.height),
-                            strokeWidth = 5f
-                        )
-                    }
-                    capturedCorners.forEach { (point, hand) ->
-                        val center = frame.worldToScreen(point, size.width, size.height)
-                        drawCircle(
-                            color = hand.color.copy(alpha = 0.25f),
-                            radius = 34f,
-                            center = center
-                        )
-                        drawCircle(
-                            color = hand.color,
-                            radius = 34f,
-                            center = center,
-                            style = Stroke(width = 6f)
-                        )
+                    if (calibrationStage != CalibrationStage.READY) {
+                        capturedCorners.forEach { (point, hand) ->
+                            val center = frame.worldToScreen(point, size.width, size.height)
+                            drawCircle(
+                                color = hand.color.copy(alpha = 0.55f),
+                                radius = 34f,
+                                center = center
+                            )
+                        }
                     }
 
                     val currentDirection = when (calibrationStage) {
@@ -740,40 +747,68 @@ private fun PoseScreen(state: ReceiverUiState) {
                     currentDirection
                         ?.let(frame::diagonalCalibrationHands)
                         ?.let { hands ->
-                            listOf(hands.left, hands.right).forEach { point ->
+                            listOf(
+                                hands.left to TargetHand.LEFT,
+                                hands.right to TargetHand.RIGHT
+                            ).forEach { (point, hand) ->
                                 val center = frame.worldToScreen(point, size.width, size.height)
                                 drawCircle(
-                                    color = Color.White.copy(alpha = 0.22f),
+                                    color = hand.color.copy(alpha = 0.28f),
                                     radius = 48f,
                                     center = center
                                 )
-                                drawCircle(
-                                    color = Color(0xFF34D399),
-                                    radius = 48f * calibrationProgress.coerceAtLeast(0.08f),
-                                    center = center,
-                                    style = Stroke(width = 8f)
-                                )
+                                if (calibrationProgress > 0f) {
+                                    drawCircle(
+                                        color = hand.color.copy(alpha = 0.92f),
+                                        radius = 48f * sqrt(calibrationProgress),
+                                        center = center
+                                    )
+                                }
                             }
                         }
 
                     if (calibrationStage == CalibrationStage.READY) {
-                        frame.readyTarget(size.width, size.height)?.let { target ->
-                            drawCircle(
-                                color = Color.White.copy(alpha = 0.12f),
-                                radius = target.radius,
-                                center = target.center
-                            )
-                            drawCircle(
-                                color = Color(0xFF34D399),
-                                radius = target.radius,
-                                center = target.center,
-                                style = Stroke(width = 10f)
-                            )
-                            if (readyProgress > 0f) {
+                        frame.readyTargets(
+                            topHands = topCornerHands,
+                            targetWidth = size.width,
+                            targetHeight = size.height
+                        )?.let { targets ->
+                            listOf(
+                                Triple(
+                                    targets.left,
+                                    TargetHand.LEFT,
+                                    leftHandInReadyTarget
+                                ),
+                                Triple(
+                                    targets.right,
+                                    TargetHand.RIGHT,
+                                    rightHandInReadyTarget
+                                )
+                            ).forEach { (target, hand, handIsInside) ->
                                 drawCircle(
-                                    color = Color(0xFF34D399).copy(alpha = 0.5f),
-                                    radius = target.radius * readyProgress,
+                                    color = hand.color.copy(alpha = if (handIsInside) 0.46f else 0.24f),
+                                    radius = target.radius,
                                     center = target.center
+                                )
+                                if (readyProgress > 0f) {
+                                    drawCircle(
+                                        color = hand.color.copy(alpha = 0.96f),
+                                        radius = target.radius * sqrt(readyProgress),
+                                        center = target.center
+                                    )
+                                }
+                                val countdown = ceil(
+                                    (1f - readyProgress) * READY_HOLD_SECONDS
+                                ).toInt().coerceIn(1, READY_HOLD_SECONDS.toInt())
+                                readyCountdownPaint.textSize = target.radius * 0.9f
+                                readyCountdownPaint.alpha = if (handIsInside) 255 else 150
+                                val verticalCenter = target.center.y -
+                                    (readyCountdownPaint.ascent() + readyCountdownPaint.descent()) / 2f
+                                drawContext.canvas.nativeCanvas.drawText(
+                                    countdown.toString(),
+                                    target.center.x,
+                                    verticalCenter,
+                                    readyCountdownPaint
                                 )
                             }
                         }
@@ -949,37 +984,67 @@ private fun PoseScreen(state: ReceiverUiState) {
                 modifier = Modifier.align(Alignment.Center)
             )
         } else if (calibration == null) {
-            Text(
-                text = when (calibrationStage) {
-                    CalibrationStage.TOP_CORNERS -> {
-                        if (calibrationProgress > 0f) {
-                            val secondsRemaining = ceil(
-                                (1f - calibrationProgress) * CALIBRATION_HOLD_SECONDS
-                            ).toInt().coerceAtLeast(1)
-                            "Hold both arms diagonally UP — capturing in $secondsRemaining"
-                        } else {
-                            "Point both arms diagonally UP toward the top corners"
+            if (calibrationStage == CalibrationStage.READY) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Image(
+                        bitmap = readyUpBitmap,
+                        contentDescription = "Ready up",
+                        modifier = Modifier.size(width = 270.dp, height = 96.dp)
+                    )
+                    Text(
+                        text = when {
+                            leftHandInReadyTarget && rightHandInReadyTarget ->
+                                "Hold steady — countdown started"
+                            leftHandInReadyTarget ->
+                                "Raise your right hand into the blue target"
+                            rightHandInReadyTarget ->
+                                "Raise your left hand into the red target"
+                            else -> "Raise both hands into the two targets"
+                        },
+                        color = Color.White,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                Text(
+                    text = when (calibrationStage) {
+                        CalibrationStage.TOP_CORNERS -> {
+                            if (calibrationProgress > 0f) {
+                                val secondsRemaining = ceil(
+                                    (1f - calibrationProgress) * CALIBRATION_HOLD_SECONDS
+                                ).toInt().coerceAtLeast(1)
+                                "Hold both arms diagonally UP — capturing in $secondsRemaining"
+                            } else {
+                                "Point both arms diagonally UP toward the top corners"
+                            }
                         }
-                    }
-                    CalibrationStage.BOTTOM_CORNERS -> {
-                        if (calibrationProgress > 0f) {
-                            val secondsRemaining = ceil(
-                                (1f - calibrationProgress) * CALIBRATION_HOLD_SECONDS
-                            ).toInt().coerceAtLeast(1)
-                            "Hold both arms diagonally DOWN — capturing in $secondsRemaining"
-                        } else {
-                            "Now point both arms diagonally DOWN toward the bottom corners"
+                        CalibrationStage.BOTTOM_CORNERS -> {
+                            if (calibrationProgress > 0f) {
+                                val secondsRemaining = ceil(
+                                    (1f - calibrationProgress) * CALIBRATION_HOLD_SECONDS
+                                ).toInt().coerceAtLeast(1)
+                                "Hold both arms diagonally DOWN — capturing in $secondsRemaining"
+                            } else {
+                                "Now point both arms diagonally DOWN toward the bottom corners"
+                            }
                         }
-                    }
-                    CalibrationStage.READY ->
-                        "Corners captured — hold both hands in the circle to start"
-                },
-                color = Color.White,
-                fontSize = 30.sp,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(48.dp)
-            )
+                        CalibrationStage.READY -> ""
+                    },
+                    color = Color.White,
+                    fontSize = 30.sp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(48.dp)
+                )
+            }
         }
 
         if (calibration != null) {
@@ -1607,10 +1672,16 @@ private data class ReadyTarget(
     val radius: Float
 )
 
+private data class ReadyTargets(
+    val left: ReadyTarget,
+    val right: ReadyTarget
+)
+
 private const val CALIBRATION_HOLD_SECONDS = 1.4f
 private const val CALIBRATION_PADDING = 0.10f
 private const val CALIBRATION_SMOOTHING = 0.22f
-private const val READY_HOLD_SECONDS = 0.7f
+private const val READY_HOLD_SECONDS = 3f
+private const val READY_TARGET_INSET = 0.36f
 private const val POSE_INTERPOLATION_SECONDS = 0.06f
 private const val NOTE_TRAVEL_SECONDS = 1.6f
 private const val NOTE_EARLY_HIT_WINDOW_SECONDS = 0.18f
@@ -1832,23 +1903,36 @@ private fun PoseFrame.screenPoint(
     return worldToScreen(point, targetWidth, targetHeight, viewBounds)
 }
 
-private fun PoseFrame.readyTarget(
+private fun PoseFrame.readyTargets(
+    topHands: CalibrationHands?,
     targetWidth: Float,
     targetHeight: Float
-): ReadyTarget? {
-    val head = screenPoint(0, targetWidth, targetHeight) ?: return null
+): ReadyTargets? {
+    if (topHands == null) return null
     val leftShoulder = screenPoint(11, targetWidth, targetHeight) ?: return null
     val rightShoulder = screenPoint(12, targetWidth, targetHeight) ?: return null
     val shoulderSpan = (leftShoulder - rightShoulder).getDistance()
     if (shoulderSpan <= 0f) return null
 
-    val radius = (shoulderSpan * 0.42f).coerceIn(54f, 110f)
-    return ReadyTarget(
-        center = Offset(
-            x = head.x.coerceIn(radius + 24f, targetWidth - radius - 24f),
-            y = (head.y - radius * 1.35f).coerceAtLeast(radius + 24f)
-        ),
-        radius = radius
+    val topLeft = worldToScreen(topHands.left, targetWidth, targetHeight)
+    val topRight = worldToScreen(topHands.right, targetWidth, targetHeight)
+    val midpointX = (topLeft.x + topRight.x) / 2f
+    val targetY = ((topLeft.y + topRight.y) / 2f).coerceIn(
+        targetHeight * 0.28f,
+        targetHeight * 0.42f
+    )
+    val shortEdge = min(targetWidth, targetHeight)
+    val radius = (shoulderSpan * 0.34f).coerceIn(shortEdge * 0.055f, shortEdge * 0.09f)
+
+    fun insetCenter(point: Offset): Offset = Offset(
+        x = (point.x + (midpointX - point.x) * READY_TARGET_INSET)
+            .coerceIn(radius + 24f, targetWidth - radius - 24f),
+        y = targetY.coerceIn(radius + 24f, targetHeight - radius - 24f)
+    )
+
+    return ReadyTargets(
+        left = ReadyTarget(center = insetCenter(topLeft), radius = radius),
+        right = ReadyTarget(center = insetCenter(topRight), radius = radius)
     )
 }
 
