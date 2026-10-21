@@ -7,11 +7,13 @@ import android.util.Base64
 import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -57,11 +59,13 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -70,8 +74,11 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -81,13 +88,16 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.tv.material3.Text
 import androidx.tv.material3.Button
+import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import io.github.ansellmaximilian.firebeats.ui.theme.FireBeatsTheme
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -118,11 +128,92 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun ReceiverScreen(receiver: ReceiverController) {
     val state by receiver.state.collectAsState()
+    var showScoreboards by remember { mutableStateOf(false) }
+    var scoreboardNavigationStep by remember { mutableIntStateOf(0) }
+    var pairingMenuAction by remember { mutableStateOf(PairingMenuAction.SCOREBOARDS) }
+    val menuFocusRequester = remember { FocusRequester() }
+    val menuVisible = !state.poseChannelOpen && !state.remoteTrackReceived
+    val retryVisible = !state.signalingConnected && state.room != null
+
+    BackHandler(enabled = showScoreboards) {
+        showScoreboards = false
+    }
+    LaunchedEffect(state.poseChannelOpen, state.remoteTrackReceived) {
+        if (state.poseChannelOpen || state.remoteTrackReceived) {
+            showScoreboards = false
+        }
+    }
+    LaunchedEffect(menuVisible, showScoreboards) {
+        if (menuVisible) {
+            withFrameNanos { }
+            menuFocusRequester.requestFocus()
+        }
+    }
+    LaunchedEffect(retryVisible) {
+        if (!retryVisible && pairingMenuAction == PairingMenuAction.RETRY) {
+            pairingMenuAction = PairingMenuAction.SCOREBOARDS
+        }
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .focusRequester(menuFocusRequester)
+            .onPreviewKeyEvent { event ->
+                if (!menuVisible || event.type != KeyEventType.KeyDown) {
+                    false
+                } else if (showScoreboards) {
+                    when (event.key) {
+                        Key.DirectionLeft -> {
+                            scoreboardNavigationStep -= 1
+                            true
+                        }
+                        Key.DirectionRight -> {
+                            scoreboardNavigationStep += 1
+                            true
+                        }
+                        Key.DirectionCenter,
+                        Key.Enter,
+                        Key.NumPadEnter,
+                        Key.ButtonA -> {
+                            showScoreboards = false
+                            true
+                        }
+                        else -> false
+                    }
+                } else {
+                    when (event.key) {
+                        Key.DirectionUp,
+                        Key.DirectionDown -> {
+                            if (retryVisible) {
+                                pairingMenuAction = when (pairingMenuAction) {
+                                    PairingMenuAction.SCOREBOARDS -> PairingMenuAction.RETRY
+                                    PairingMenuAction.RETRY -> PairingMenuAction.SCOREBOARDS
+                                }
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        Key.DirectionCenter,
+                        Key.Enter,
+                        Key.NumPadEnter,
+                        Key.ButtonA -> {
+                            when (pairingMenuAction) {
+                                PairingMenuAction.SCOREBOARDS -> {
+                                    scoreboardNavigationStep = 0
+                                    showScoreboards = true
+                                }
+                                PairingMenuAction.RETRY -> receiver.retrySignalingNow()
+                            }
+                            true
+                        }
+                        else -> false
+                    }
+                }
+            }
+            .focusable()
     ) {
         if (state.poseChannelOpen) {
             PoseScreen(state)
@@ -140,8 +231,13 @@ private fun ReceiverScreen(receiver: ReceiverController) {
                 },
                 onRelease = receiver::detachRenderer
             )
+        } else if (showScoreboards) {
+            ScoreboardsScreen(navigationStep = scoreboardNavigationStep)
         } else {
-            PairingScreen(state, receiver::retrySignalingNow)
+            PairingScreen(
+                state = state,
+                selectedMenuAction = pairingMenuAction
+            )
         }
     }
 }
@@ -225,6 +321,20 @@ private fun PoseScreen(state: ReceiverUiState) {
             context.resources,
             R.drawable.firebeats_ready_up,
             BitmapFactory.Options().apply { inSampleSize = 4 }
+        ).asImageBitmap()
+    }
+    val comboFlamesBitmap = remember {
+        BitmapFactory.decodeResource(
+            context.resources,
+            R.drawable.firebeats_combo_flames,
+            BitmapFactory.Options().apply { inSampleSize = 2 }
+        ).asImageBitmap()
+    }
+    val maxComboFlamesBitmap = remember {
+        BitmapFactory.decodeResource(
+            context.resources,
+            R.drawable.firebeats_combo_flames_max,
+            BitmapFactory.Options().apply { inSampleSize = 2 }
         ).asImageBitmap()
     }
     val scorePopupPaint = remember {
@@ -976,6 +1086,20 @@ private fun PoseScreen(state: ReceiverUiState) {
             )
         }
 
+        comboTier(combo)?.let { tier ->
+            if (calibration != null && !gameFinished) {
+                ComboIndicator(
+                    combo = combo,
+                    tier = tier,
+                    flames = comboFlamesBitmap,
+                    maxFlames = maxComboFlamesBitmap,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 16.dp)
+                )
+            }
+        }
+
         if (frame == null || frame.landmarks.size < 33) {
             Text(
                 text = "Keep your head, elbows, and both hands visible",
@@ -1130,6 +1254,151 @@ private fun PoseScreen(state: ReceiverUiState) {
                 onPlayAgain = { restartRound(false) },
                 onNextPlayer = { restartRound(true) }
             )
+        }
+    }
+}
+
+@Composable
+private fun ComboIndicator(
+    combo: Int,
+    tier: ComboTier,
+    flames: ImageBitmap,
+    maxFlames: ImageBitmap,
+    modifier: Modifier = Modifier
+) {
+    var hasEntered by remember { mutableStateOf(false) }
+    val emphasisScale = remember { Animatable(1f) }
+    val emphasisAlpha = remember { Animatable(1f) }
+    val animatedSize by animateFloatAsState(
+        targetValue = tier.frameSizeDp,
+        animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing),
+        label = "combo-tier-size"
+    )
+    val idleTransition = rememberInfiniteTransition(label = "combo-idle-bounce")
+    val pulse by idleTransition.animateFloat(
+        initialValue = 0.97f,
+        targetValue = if (tier == ComboTier.MAX) 1.08f else 1.045f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                durationMillis = if (tier == ComboTier.MAX) 420 else 560,
+                easing = FastOutSlowInEasing
+            ),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "combo-flame-scale"
+    )
+    val bounceDistancePx = with(LocalDensity.current) {
+        (if (tier == ComboTier.MAX) 10.dp else 7.dp).toPx()
+    }
+    val bounceOffsetY by idleTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = -bounceDistancePx,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                durationMillis = if (tier == ComboTier.MAX) 420 else 560,
+                easing = FastOutSlowInEasing
+            ),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "combo-flame-bounce"
+    )
+
+    LaunchedEffect(tier) {
+        val firstAppearance = !hasEntered
+        hasEntered = true
+        emphasisScale.snapTo(if (firstAppearance) 0.32f else 0.72f)
+        emphasisAlpha.snapTo(if (firstAppearance) 0f else 1f)
+        coroutineScope {
+            launch {
+                emphasisScale.animateTo(
+                    targetValue = if (firstAppearance) 1.28f else 1.2f,
+                    animationSpec = tween(
+                        durationMillis = if (firstAppearance) 280 else 210,
+                        easing = FastOutSlowInEasing
+                    )
+                )
+            }
+            if (firstAppearance) {
+                launch {
+                    emphasisAlpha.animateTo(
+                        targetValue = 1f,
+                        animationSpec = tween(durationMillis = 150)
+                    )
+                }
+            }
+        }
+        emphasisScale.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing)
+        )
+    }
+    val primaryStyle = TextStyle(
+        color = if (tier == ComboTier.MAX) Color(0xFFFF6A00) else Color.White,
+        fontSize = tier.primaryTextSp.sp,
+        fontWeight = FontWeight.Black,
+        fontStyle = FontStyle.Italic,
+        fontFamily = FontFamily.SansSerif,
+        textAlign = TextAlign.Center,
+        shadow = Shadow(
+            color = Color.Black,
+            offset = Offset(4f, 5f),
+            blurRadius = 8f
+        )
+    )
+
+    Box(
+        modifier = modifier
+            .size(animatedSize.dp)
+            .graphicsLayer {
+                scaleX = pulse * emphasisScale.value
+                scaleY = pulse * emphasisScale.value
+                translationY = bounceOffsetY
+                alpha = emphasisAlpha.value
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Image(
+            bitmap = if (tier == ComboTier.MAX) maxFlames else flames,
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize()
+        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(top = (animatedSize * 0.08f).dp)
+        ) {
+            if (tier == ComboTier.MAX) {
+                Text(text = "MAX", style = primaryStyle)
+                Text(
+                    text = "COMBO",
+                    color = Color.White,
+                    fontSize = 25.sp,
+                    fontWeight = FontWeight.Black,
+                    fontStyle = FontStyle.Italic,
+                    style = TextStyle(
+                        shadow = Shadow(Color.Black, Offset(3f, 4f), 7f)
+                    )
+                )
+                Text(
+                    text = "×${tier.multiplier}",
+                    color = Color(0xFFFDBA74),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            } else {
+                Text(text = "×${tier.multiplier}", style = primaryStyle)
+                Text(
+                    text = "$combo HIT COMBO",
+                    color = Color(0xFFFDBA74),
+                    fontSize = tier.secondaryTextSp.sp,
+                    fontWeight = FontWeight.Black,
+                    fontStyle = FontStyle.Italic,
+                    textAlign = TextAlign.Center,
+                    style = TextStyle(
+                        shadow = Shadow(Color.Black, Offset(3f, 4f), 7f)
+                    )
+                )
+            }
         }
     }
 }
@@ -1312,12 +1581,38 @@ private fun GameResultsScreen(
             ) {
                 Button(
                     onClick = onPlayAgain,
-                    modifier = Modifier.focusRequester(playAgainFocusRequester)
+                    modifier = Modifier.focusRequester(playAgainFocusRequester),
+                    colors = ButtonDefaults.colors(
+                        containerColor = Color(0xFF1E293B),
+                        contentColor = Color(0xFFE2E8F0),
+                        focusedContainerColor = Color(0xFFFF6A00),
+                        focusedContentColor = Color.White,
+                        pressedContainerColor = Color(0xFFFF8A33),
+                        pressedContentColor = Color.White
+                    ),
+                    scale = ButtonDefaults.scale(
+                        focusedScale = 1.08f,
+                        pressedScale = 0.98f
+                    )
                 ) {
                     Text("Play again", fontSize = 18.sp)
                 }
                 Spacer(modifier = Modifier.width(18.dp))
-                Button(onClick = onNextPlayer) {
+                Button(
+                    onClick = onNextPlayer,
+                    colors = ButtonDefaults.colors(
+                        containerColor = Color(0xFF1E293B),
+                        contentColor = Color(0xFFE2E8F0),
+                        focusedContainerColor = Color(0xFFFF6A00),
+                        focusedContentColor = Color.White,
+                        pressedContainerColor = Color(0xFFFF8A33),
+                        pressedContentColor = Color.White
+                    ),
+                    scale = ButtonDefaults.scale(
+                        focusedScale = 1.08f,
+                        pressedScale = 0.98f
+                    )
+                ) {
                     Text("Next player · recalibrate", fontSize = 18.sp)
                 }
                 Spacer(modifier = Modifier.width(24.dp))
@@ -1414,6 +1709,7 @@ private fun LocalLeaderboardPanel(
     entries: List<LocalScoreEntry>,
     highlightedEntryId: String?,
     scoreboard: LocalScoreboard,
+    visibleEntryLimit: Int = 5,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -1451,7 +1747,7 @@ private fun LocalLeaderboardPanel(
                 )
             }
         } else {
-            entries.take(5).forEachIndexed { index, entry ->
+            entries.take(visibleEntryLimit).forEachIndexed { index, entry ->
                 val highlighted = entry.id == highlightedEntryId
                 val avatar = remember(entry.avatarFileName) {
                     scoreboard.avatarFile(entry)
@@ -1515,6 +1811,145 @@ private fun LocalLeaderboardPanel(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalTvMaterial3Api::class)
+private fun ScoreboardsScreen(navigationStep: Int) {
+    val context = LocalContext.current
+    val scoreboard = remember(context) { LocalScoreboard(context.applicationContext) }
+    val leaderboards = remember { scoreboard.leaderboards() }
+    val selectedTrackIndex = if (leaderboards.isEmpty()) {
+        0
+    } else {
+        ((navigationStep % leaderboards.size) + leaderboards.size) % leaderboards.size
+    }
+    val wordmark = remember {
+        BitmapFactory.decodeResource(
+            context.resources,
+            R.drawable.firebeats_wordmark,
+            BitmapFactory.Options().apply { inSampleSize = 4 }
+        ).asImageBitmap()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF080B12))
+            .padding(horizontal = 48.dp, vertical = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Image(
+                bitmap = wordmark,
+                contentDescription = "Fire Beats",
+                modifier = Modifier.size(width = 280.dp, height = 100.dp)
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "LOCAL SCOREBOARDS",
+                    color = Color.White,
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.Black
+                )
+                Text(
+                    text = if (leaderboards.size > 1) {
+                        "← / → change track  •  BACK returns to pairing"
+                    } else {
+                        "BACK returns to pairing"
+                    },
+                    color = Color(0xFF94A3B8),
+                    fontSize = 16.sp
+                )
+            }
+        }
+
+        if (leaderboards.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color(0xFF111827), RoundedCornerShape(24.dp))
+                    .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(24.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "NO SCORES YET",
+                        color = Color(0xFFFDBA74),
+                        fontSize = 34.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                    Text(
+                        text = "Scan the QR code and finish a song to claim the first spot.",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 21.sp
+                    )
+                }
+            }
+        } else {
+            val selectedBoard = leaderboards[selectedTrackIndex]
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = selectedBoard.trackName,
+                        color = Color(0xFFFDBA74),
+                        fontSize = 30.sp,
+                        fontWeight = FontWeight.Black,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (leaderboards.size > 1) {
+                        Text(
+                            text = "${selectedTrackIndex + 1} / ${leaderboards.size}",
+                            color = Color(0xFFCBD5E1),
+                            fontSize = 18.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                LocalLeaderboardPanel(
+                    entries = selectedBoard.entries,
+                    highlightedEntryId = null,
+                    scoreboard = scoreboard,
+                    visibleEntryLimit = 7,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .background(Color(0xFFFF6A00), RoundedCornerShape(28.dp))
+                .padding(horizontal = 28.dp, vertical = 13.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "Back to pairing",
+                color = Color.White,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
@@ -1606,6 +2041,26 @@ private enum class TargetHand(
     RIGHT(Color(0xFF00BFF3), 16)
 }
 
+private enum class PairingMenuAction {
+    SCOREBOARDS,
+    RETRY
+}
+
+private enum class ComboTier(
+    val minimumCombo: Int,
+    val multiplier: Int,
+    val frameSizeDp: Float,
+    val primaryTextSp: Float,
+    val secondaryTextSp: Float
+) {
+    X2(2, 2, 120f, 36f, 11f),
+    X3(4, 3, 134f, 39f, 12f),
+    X4(8, 4, 148f, 42f, 13f),
+    X5(16, 5, 164f, 45f, 14f),
+    X6(32, 6, 180f, 48f, 15f),
+    MAX(64, 7, 202f, 40f, 16f)
+}
+
 private enum class CalibrationStage {
     TOP_CORNERS,
     BOTTOM_CORNERS,
@@ -1695,8 +2150,6 @@ private const val HIT_TARGET_HALF_SIZE = 0.145f
 private const val FIST_RADIUS = 0.03f
 private const val HIT_EFFECT_SECONDS = 0.48f
 private const val SCORE_POPUP_SECONDS = 0.72f
-private const val HITS_PER_MULTIPLIER = 5
-private const val MAX_COMBO_MULTIPLIER = 4
 private val targetHands = TargetHand.values().toList()
 private val beatLanes = listOf(
     BeatLane(0.15f, 0.20f),
@@ -1758,8 +2211,17 @@ private fun BeatNote.isInsideHitWindow(songTime: Float, inferenceMs: Float): Boo
         difference <= noteLateHitWindowSeconds(inferenceMs)
 }
 
-private fun comboMultiplier(combo: Int): Int =
-    (1 + combo / HITS_PER_MULTIPLIER).coerceAtMost(MAX_COMBO_MULTIPLIER)
+private fun comboTier(combo: Int): ComboTier? = when {
+    combo >= ComboTier.MAX.minimumCombo -> ComboTier.MAX
+    combo >= ComboTier.X6.minimumCombo -> ComboTier.X6
+    combo >= ComboTier.X5.minimumCombo -> ComboTier.X5
+    combo >= ComboTier.X4.minimumCombo -> ComboTier.X4
+    combo >= ComboTier.X3.minimumCombo -> ComboTier.X3
+    combo >= ComboTier.X2.minimumCombo -> ComboTier.X2
+    else -> null
+}
+
+private fun comboMultiplier(combo: Int): Int = comboTier(combo)?.multiplier ?: 1
 
 private fun noteHitsFist(
     note: BeatNote,
@@ -1956,7 +2418,7 @@ private val poseJointIndices = listOf(
 @OptIn(ExperimentalTvMaterial3Api::class)
 private fun PairingScreen(
     state: ReceiverUiState,
-    onRetry: () -> Unit
+    selectedMenuAction: PairingMenuAction
 ) {
     val context = LocalContext.current
     val qrCode = remember(state.phoneUrl) {
@@ -2064,6 +2526,10 @@ private fun PairingScreen(
                             fontSize = 20.sp
                         )
                     }
+                    PairingMenuPill(
+                        text = "View scoreboards",
+                        selected = selectedMenuAction == PairingMenuAction.SCOREBOARDS
+                    )
                     state.error?.let { error ->
                         Text(
                             text = error,
@@ -2072,20 +2538,38 @@ private fun PairingScreen(
                         )
                     }
                     if (!state.signalingConnected && state.room != null) {
-                        Button(onClick = onRetry) {
-                            Text(
-                                text = if (state.signalingRetryAttempt > 0) {
-                                    "Retry now"
-                                } else {
-                                    "Connect again"
-                                },
-                                fontSize = 20.sp
-                            )
-                        }
+                        PairingMenuPill(
+                            text = if (state.signalingRetryAttempt > 0) {
+                                "Retry now"
+                            } else {
+                                "Connect again"
+                            },
+                            selected = selectedMenuAction == PairingMenuAction.RETRY
+                        )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PairingMenuPill(text: String, selected: Boolean) {
+    Box(
+        modifier = Modifier
+            .background(
+                color = if (selected) Color(0xFFFF6A00) else Color(0xFF1E293B),
+                shape = RoundedCornerShape(28.dp)
+            )
+            .padding(horizontal = 28.dp, vertical = 13.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = if (selected) Color.White else Color(0xFFE2E8F0),
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 

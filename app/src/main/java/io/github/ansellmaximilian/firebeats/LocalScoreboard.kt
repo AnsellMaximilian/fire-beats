@@ -20,6 +20,12 @@ internal data class LocalScoreEntry(
     val avatarFileName: String?
 )
 
+internal data class LocalTrackLeaderboard(
+    val trackId: String,
+    val trackName: String,
+    val entries: List<LocalScoreEntry>
+)
+
 internal class LocalScoreboard(context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     private val avatarDirectory = File(context.filesDir, AVATAR_DIRECTORY_NAME)
@@ -34,6 +40,20 @@ internal class LocalScoreboard(context: Context) {
         .filter { it.trackId == trackId }
         .sortedWith(scoreOrder)
         .take(MAX_SCORES_PER_TRACK)
+
+    @Synchronized
+    fun leaderboards(): List<LocalTrackLeaderboard> = readEntries()
+        .groupBy(LocalScoreEntry::trackId)
+        .map { (trackId, entries) ->
+            LocalTrackLeaderboard(
+                trackId = trackId,
+                trackName = entries.maxByOrNull(LocalScoreEntry::achievedAtEpochMs)
+                    ?.trackName
+                    ?: "Beat track",
+                entries = entries.sortedWith(scoreOrder).take(MAX_SCORES_PER_TRACK)
+            )
+        }
+        .sortedBy(LocalTrackLeaderboard::trackName)
 
     @Synchronized
     fun save(
