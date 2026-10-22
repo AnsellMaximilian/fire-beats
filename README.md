@@ -62,6 +62,13 @@ Android builds target `https://fire-beats.onrender.com` by default. Override tha
 .\gradlew.bat :app:assembleDebug -PFIREBEATS_SERVER_URL=http://10.0.2.2:3050
 ```
 
+## Tagged Android releases
+
+Pushing a tag such as `v0.1.0` builds and verifies a release-signed APK, publishes
+it with a SHA-256 checksum as a GitHub Release, and retains the same files as a
+workflow artifact. The one-time signing-key setup and release commands are in
+[`docs/releasing.md`](docs/releasing.md).
+
 Phone browsers require HTTPS for camera access. For local device testing, set `PUBLIC_URL` to an HTTPS tunnel or run the optional local TLS listener:
 
 ```powershell

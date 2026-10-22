@@ -9,6 +9,24 @@ val fireBeatsServerUrl = providers.gradleProperty("FIREBEATS_SERVER_URL")
 val showDebugStats = providers.gradleProperty("FIREBEATS_SHOW_DEBUG_STATS")
     .map { it.equals("true", ignoreCase = true) }
     .orElse(false)
+val releaseVersionCode = providers.gradleProperty("FIREBEATS_VERSION_CODE")
+    .map { value ->
+        value.toIntOrNull()
+            ?: error("FIREBEATS_VERSION_CODE must be an integer, but was '$value'")
+    }
+    .orElse(2)
+val releaseVersionName = providers.gradleProperty("FIREBEATS_VERSION_NAME")
+    .orElse("1.0")
+val releaseKeystorePath = providers.environmentVariable("FIREBEATS_KEYSTORE_PATH")
+val releaseKeystorePassword = providers.environmentVariable("FIREBEATS_KEYSTORE_PASSWORD")
+val releaseKeyAlias = providers.environmentVariable("FIREBEATS_KEY_ALIAS")
+val releaseKeyPassword = providers.environmentVariable("FIREBEATS_KEY_PASSWORD")
+val releaseSigningConfigured = listOf(
+    releaseKeystorePath,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword
+).all { it.isPresent }
 
 android {
     namespace = "io.github.ansellmaximilian.firebeats"
@@ -22,16 +40,30 @@ android {
         applicationId = "io.github.ansellmaximilian.firebeats"
         minSdk = 23
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.0"
+        versionCode = releaseVersionCode.get()
+        versionName = releaseVersionName.get()
 
         buildConfigField("String", "SERVER_URL", "\"${fireBeatsServerUrl.get()}\"")
         buildConfigField("boolean", "SHOW_DEBUG_STATS", showDebugStats.get().toString())
 
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(releaseKeystorePath.get())
+                storePassword = releaseKeystorePassword.get()
+                keyAlias = releaseKeyAlias.get()
+                keyPassword = releaseKeyPassword.get()
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

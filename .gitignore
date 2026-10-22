@@ -27,3 +27,5 @@ desktop-playground/node_modules/
 .neon
 node_modules/
 .env.local
+*.jks
+*.keystore
