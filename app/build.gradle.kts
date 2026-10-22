@@ -6,6 +6,9 @@ plugins {
 val fireBeatsServerUrl = providers.gradleProperty("FIREBEATS_SERVER_URL")
     .orElse(providers.gradleProperty("FIRELAB_SERVER_URL"))
     .orElse("https://fire-beats.onrender.com")
+val showDebugStats = providers.gradleProperty("FIREBEATS_SHOW_DEBUG_STATS")
+    .map { it.equals("true", ignoreCase = true) }
+    .orElse(false)
 
 android {
     namespace = "io.github.ansellmaximilian.firebeats"
@@ -19,10 +22,11 @@ android {
         applicationId = "io.github.ansellmaximilian.firebeats"
         minSdk = 23
         targetSdk = 36
-        versionCode = 1
+        versionCode = 2
         versionName = "1.0"
 
         buildConfigField("String", "SERVER_URL", "\"${fireBeatsServerUrl.get()}\"")
+        buildConfigField("boolean", "SHOW_DEBUG_STATS", showDebugStats.get().toString())
 
     }
 

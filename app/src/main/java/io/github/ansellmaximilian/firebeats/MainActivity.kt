@@ -61,6 +61,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -351,8 +352,8 @@ private fun PoseScreen(state: ReceiverUiState) {
             typeface = android.graphics.Typeface.DEFAULT_BOLD
         }
     }
-    val popSoundPlayer = remember(context) {
-        PopSoundPlayer(context.applicationContext)
+    val gameSoundPlayer = remember(context) {
+        GameSoundPlayer(context.applicationContext)
     }
     val beatAudioPlayer = remember { BeatAudioPlayer() }
     val localScoreboard = remember(context) {
@@ -362,9 +363,9 @@ private fun PoseScreen(state: ReceiverUiState) {
         VoicePlaybackController(context.applicationContext)
     }
 
-    DisposableEffect(popSoundPlayer, beatAudioPlayer, voicePlaybackController) {
+    DisposableEffect(gameSoundPlayer, beatAudioPlayer, voicePlaybackController) {
         onDispose {
-            popSoundPlayer.release()
+            gameSoundPlayer.release()
             beatAudioPlayer.release()
             voicePlaybackController.release()
         }
@@ -634,18 +635,23 @@ private fun PoseScreen(state: ReceiverUiState) {
             }
             val scoringEvents = newHitEffects.size
             if (scoringEvents > 0) {
+                val previousTier = comboTier(combo)
                 var pointsAwarded = 0
                 repeat(scoringEvents) {
                     combo += 1
                     pointsAwarded += comboMultiplier(combo)
                 }
+                val currentTier = comboTier(combo)
                 score += pointsAwarded
                 hitEffects = hitEffects + newHitEffects
                 scorePopup = ScorePopup(
                     points = pointsAwarded,
                     multiplier = comboMultiplier(combo)
                 )
-                repeat(scoringEvents.coerceAtMost(3)) { popSoundPlayer.play() }
+                repeat(scoringEvents.coerceAtMost(3)) { gameSoundPlayer.playHit() }
+                if (currentTier != null && currentTier != previousTier) {
+                    gameSoundPlayer.playComboTier()
+                }
                 Log.i(
                     "FireTV",
                     "Gameplay score event; events=$scoringEvents score=$score combo=$combo " +
@@ -1048,42 +1054,60 @@ private fun PoseScreen(state: ReceiverUiState) {
             }
         }
 
-        Text(
-            text = state.status,
-            color = Color(0xFFFDBA74),
-            fontSize = 20.sp,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(24.dp)
-        )
-
-        if (state.poseChannelOpen) {
-            val fpsText = if (state.poseFps > 0f) {
-                String.format(java.util.Locale.US, "%.1f", state.poseFps)
-            } else {
-                "--"
-            }
+        if (BuildConfig.SHOW_DEBUG_STATS) {
             Text(
-                text = "Pose $fpsText FPS  •  ${state.poseDelegate}  •  " +
-                    "inference ${state.poseInferenceMs.toInt()} ms",
-                color = Color(0xFF94A3B8),
-                fontSize = 17.sp,
+                text = state.status,
+                color = Color(0xFFFDBA74),
+                fontSize = 20.sp,
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(start = 24.dp, top = 56.dp)
+                    .padding(24.dp)
             )
+            if (state.poseChannelOpen) {
+                val fpsText = if (state.poseFps > 0f) {
+                    String.format(java.util.Locale.US, "%.1f", state.poseFps)
+                } else {
+                    "--"
+                }
+                Text(
+                    text = "Pose $fpsText FPS  •  ${state.poseDelegate}  •  " +
+                        "inference ${state.poseInferenceMs.toInt()} ms",
+                    color = Color(0xFF94A3B8),
+                    fontSize = 17.sp,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 24.dp, top = 56.dp)
+                )
+            }
         }
 
         if (calibration != null) {
-            val multiplier = comboMultiplier(combo)
-            Text(
-                text = "Score  $score   •   Combo  $combo  x$multiplier   •   Miss  $misses",
-                color = Color.White,
-                fontSize = 32.sp,
+            Column(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(24.dp)
-            )
+                    .align(Alignment.TopCenter)
+                    .padding(top = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(1.dp)
+            ) {
+                Text(
+                    text = "SCORE  $score",
+                    color = Color.White,
+                    fontSize = 44.sp,
+                    fontWeight = FontWeight.Black,
+                    style = TextStyle(
+                        shadow = Shadow(Color.Black, Offset(3f, 4f), 8f)
+                    )
+                )
+                Text(
+                    text = "MISSES  $misses",
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    style = TextStyle(
+                        shadow = Shadow(Color.Black, Offset(2f, 3f), 6f)
+                    )
+                )
+            }
         }
 
         comboTier(combo)?.let { tier ->
@@ -1172,23 +1196,47 @@ private fun PoseScreen(state: ReceiverUiState) {
         }
 
         if (calibration != null) {
-            val gameStatus = when {
-                audioError != null -> audioError
-                selectedTrack == null -> "Choose or upload a beat track on your phone"
-                !audioReady -> "Loading ${selectedTrack.name}…"
-                !playbackStarted -> "Get ready — ${ceil(preRollRemainingSeconds).toInt()}"
-                else -> "${selectedTrack.name}  •  ${selectedTrack.bpm.toInt()} BPM  •  " +
-                    "${songPositionSeconds.coerceAtLeast(0f).toInt()} / " +
-                    "${selectedTrack.duration.toInt()} sec"
+            when {
+                audioError != null -> Text(
+                    text = audioError.orEmpty(),
+                    color = Color(0xFFFCA5A5),
+                    fontSize = 20.sp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(24.dp)
+                )
+                selectedTrack == null -> Text(
+                    text = "Choose or upload a beat track on your phone",
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 20.sp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(24.dp)
+                )
+                !audioReady -> Text(
+                    text = "Loading ${selectedTrack.name}…",
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 20.sp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(24.dp)
+                )
+                !playbackStarted -> Text(
+                    text = "Get ready — ${ceil(preRollRemainingSeconds).toInt()}",
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 20.sp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(24.dp)
+                )
+                else -> TrackProgressStatus(
+                    track = selectedTrack,
+                    positionSeconds = songPositionSeconds,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 22.dp)
+                )
             }
-            Text(
-                text = gameStatus.orEmpty(),
-                color = if (audioError != null) Color(0xFFFCA5A5) else Color(0xFFCBD5E1),
-                fontSize = 20.sp,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(24.dp)
-            )
         }
 
         if (gamePaused && !gameFinished) {
@@ -1253,6 +1301,63 @@ private fun PoseScreen(state: ReceiverUiState) {
                 },
                 onPlayAgain = { restartRound(false) },
                 onNextPlayer = { restartRound(true) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun TrackProgressStatus(
+    track: BeatTrack,
+    positionSeconds: Float,
+    modifier: Modifier = Modifier
+) {
+    val progress = if (track.duration > 0f) {
+        (positionSeconds / track.duration).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
+    Column(
+        modifier = modifier.width(560.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = track.name,
+                color = Color.White,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(18.dp))
+            Text(
+                text = "${track.bpm.toInt()} BPM",
+                color = Color(0xFFFDBA74),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(9.dp)
+                .clip(RoundedCornerShape(5.dp))
+                .background(Color(0xFF334155))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = progress
+                        transformOrigin = TransformOrigin(0f, 0.5f)
+                    }
+                    .background(Color(0xFFFF6A00))
             )
         }
     }

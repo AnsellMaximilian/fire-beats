@@ -4,6 +4,13 @@ Fire Beats pairs a phone browser with a native Fire TV app by QR code. The phone
 
 The Android application ID is `io.github.ansellmaximilian.firebeats`. Launcher icons, the TV banner, splash screen, native pairing screen, and phone controller share the same Fire Beats identity.
 
+## Fire TV artwork
+
+- `app/src/main/res/drawable-xhdpi/firebeats_tv_banner.png` is the 320 x 180 Android TV banner referenced by the manifest.
+- `store-assets/fire-tv-app-icon.png` is the opaque 1280 x 720 app icon to upload under **Fire TV assets** in the Amazon Appstore submission.
+
+Fire OS uses the APK's square Android launcher icon for a sideloaded build on some devices. The Amazon Appstore supplies the landscape app tile after publication, so a sideloaded launcher test is not a reliable preview of the submitted Fire TV icon.
+
 The long-running Node service hosts the phone UI, creates pairing rooms, relays WebRTC signaling over WebSockets, and analyzes uploaded audio. Neon supplies Managed Auth, Postgres metadata, and S3-compatible object storage:
 
 - Guests can pair, play public default tracks, and use an avatar.
