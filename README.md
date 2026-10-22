@@ -4,6 +4,61 @@ Fire Beats pairs a phone browser with a native Fire TV app by QR code. The phone
 
 The Android application ID is `io.github.ansellmaximilian.firebeats`. Launcher icons, the TV banner, splash screen, native pairing screen, and phone controller share the same Fire Beats identity.
 
+## Install on Fire TV with Downloader
+
+The `v0.1.0` release can be sideloaded directly on a compatible Fire TV without
+a computer:
+
+1. Install **Downloader** from the Amazon Appstore.
+2. Allow Downloader to install unknown apps under **Settings > My Fire TV >
+   Developer Options > Install unknown apps**. If Developer Options is hidden,
+   open **Settings > My Fire TV > About**, highlight the device name, and press
+   the remote's center button seven times.
+3. Open Downloader and enter code **4389006**. The equivalent short URL is
+   [`aftv.news/4389006`](https://aftv.news/4389006).
+4. Download and install `fire-beats.apk`, then open Fire Beats from the Apps
+   screen.
+
+The Downloader code points specifically to the GitHub asset for `v0.1.0`:
+
+```text
+https://github.com/AnsellMaximilian/fire-beats/releases/download/v0.1.0/fire-beats.apk
+```
+
+The release must exist and be publicly accessible before the code can download
+it. A device with a development/debug build already installed must uninstall
+that build once before installing the signed release; this clears that app's
+local data. Later releases signed with the same release key can update in place.
+
+## Hardware compatibility
+
+Fire Beats is developed and tested on the **Amazon Fire TV Stick HD with Alexa
+Voice Remote (2024, Wi-Fi 5)**, also sold as “Fire TV Stick HD 2024 Wi-Fi 5 with
+Alexa.” Amazon identifies this model as build model `AFTSS`, running Fire OS 7.
+
+The current APK requires Android API level 23 or newer. It is therefore expected
+to work on Android-based Fire TV sticks, Fire TV Cubes, and televisions with Fire
+TV built in that run **Fire OS 6 or newer**, although those devices have not all
+been tested. Fire OS 5 devices use Android API level 22 and cannot install this
+build. Check a device against Amazon's [Fire OS device
+table](https://developer.amazon.com/docs/fire-tv/fire-os-overview.html) when in
+doubt.
+
+The APK does **not** support Vega OS devices, which require a separate VPKG app.
+This currently includes models such as the Fire TV Stick 4K Select (2025), Fire
+TV Stick HD (2026), and Fire TV Stick 4K 3rd Gen (2026). Amazon documents Fire OS
+and Vega OS as separate [Fire TV development
+platforms](https://developer.amazon.com/apps-and-games/sdks).
+
+Testing also requires:
+
+- A Fire TV remote or equivalent controller with a D-pad and select button.
+- A modern phone with a camera and an HTTPS-capable browser for QR pairing and
+  pose tracking.
+- Internet access on both devices. Alexa play/pause is optional and requires an
+  Alexa Voice Remote or a compatible paired Echo; D-pad controls work without
+  Alexa.
+
 ## Fire TV artwork
 
 - `app/src/main/res/drawable-xhdpi/firebeats_tv_banner.png` is the 320 x 180 Android TV banner referenced by the manifest.
